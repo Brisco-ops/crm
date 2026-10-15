@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mon CRM</title>
+<meta name="theme-color" content="#1f4e79">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top"><h1 id="title">Aujourd'hui</h1><span id="topAction"></span></header>
+<main id="main"></main>
+<button class="fab" id="fab" data-act="new-contact" aria-label="Nouveau contact">+</button>
+<nav class="tabs">
+  <a href="#/" data-tab="today">Aujourd'hui</a>
+  <a href="#/contacts" data-tab="contacts">Contacts</a>
+  <a href="#/settings" data-tab="settings">Réglages</a>
+</nav>
+<script type="module" src="app.js"></script>
+</body>
+</html>
