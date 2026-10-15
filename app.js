@@ -1,4 +1,6 @@
 import * as db from './db.js';
+import * as G from './google.js';
+import { merge } from './sync.js';
 
 const STATUTS = ['Nouveau', 'Contacté', 'RDV planifié', 'Proposition envoyée', 'Gagné', 'Perdu'];
 const CANAUX = ['WhatsApp', 'Google Meet', 'Appel', 'Email', 'En personne'];
@@ -26,19 +28,25 @@ function dueLabel(s) {
 }
 
 // ---------- état ----------
-const S = { contacts: [], tasks: [], notes: [], docs: [] };
+const S = { contacts: [], tasks: [], notes: [], docs: [], tombs: [] };
 const ui = { q: '', status: '' };
 const byId = (k, id) => S[k].find(x => x.id === id);
 
 async function load() { for (const k of Object.keys(S)) S[k] = await db.all(k); }
 async function save(store, obj) {
+  obj.updatedAt = Date.now();
   await db.put(store, obj);
   const i = S[store].findIndex(x => x.id === obj.id);
   i >= 0 ? (S[store][i] = obj) : S[store].push(obj);
+  scheduleSync();
 }
 async function remove(store, id) {
   await db.del(store, id);
   S[store] = S[store].filter(x => x.id !== id);
+  const tomb = { id, store, at: Date.now() };
+  await db.put('tombs', tomb);
+  S.tombs.push(tomb);
+  scheduleSync();
 }
 async function removeContact(id) {
   for (const k of ['tasks', 'notes', 'docs']) for (const x of S[k].filter(x => x.contactId === id)) await remove(k, x.id);
@@ -178,6 +186,7 @@ function viewToday() {
       <div class="stat"><b>${active.length}</b><small>en cours</small></div>
       <div class="stat"><b class="${late.length ? 'late' : ''}">${late.length}</b><small>en retard</small></div>
       <div class="stat"><b>${euro(pipeline)}</b><small>pipeline</small></div></div>
+    ${G.configured() ? '<p><a class="btn" href="#/meetings">📝 Réunions Meet récentes</a></p>' : ''}
     ${sec('En retard', late)}${sec('Aujourd\'hui', now)}${sec('7 prochains jours', week)}
     ${empty ? '<div class="empty">Aucune relance à venir 🎉<br>Ouvrez un contact pour en planifier une.</div>' : ''}
     ${noAction.length ? `<h2>Sans prochaine action (${noAction.length})</h2><ul class="list">${noAction.map(c => `<li><a class="grow" href="#/contact/${c.id}"><b>${esc(c.name)}</b><small>${esc(c.company || '')}</small></a><span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></li>`).join('')}</ul>` : ''}`;
@@ -219,7 +228,8 @@ function viewContact(id) {
         ${wa ? `<a class="btn wa" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
         ${c.phone ? `<a class="btn" href="tel:${esc(c.phone)}">Appeler</a>` : ''}
         ${c.email ? `<a class="btn" href="mailto:${esc(c.email)}">Email</a>` : ''}
-        ${c.driveUrl ? `<a class="btn" href="${esc(c.driveUrl)}" target="_blank" rel="noopener">Dossier Drive</a>` : ''}</div>
+        ${c.driveUrl ? `<a class="btn" href="${esc(c.driveUrl)}" target="_blank" rel="noopener">Dossier Drive</a>` : ''}
+        ${G.configured() ? `<a class="btn" href="#/meetings/${c.id}">Réunions Meet</a>` : ''}</div>
       ${c.source || c.lastContact ? `<p class="muted" style="margin:12px 0 0">${c.source ? 'Source : ' + esc(c.source) + '. ' : ''}${c.lastContact ? 'Dernier contact : ' + fmt(c.lastContact) + '.' : ''}</p>` : ''}
       ${c.notes ? `<p class="note-body" style="margin:10px 0 0">${esc(c.notes)}</p>` : ''}
     </div>
@@ -228,11 +238,11 @@ function viewContact(id) {
     <h2>Échanges <button class="btn s" data-act="add-note">+ Ajouter</button></h2>
     ${notes.length ? notes.map(n => `<div class="card"><small>${fmt(n.date)} · ${esc(n.channel)} <a href="#" data-act="del-note" data-id="${n.id}" class="muted" style="float:right">supprimer</a></small><div class="note-body">${esc(n.text)}</div></div>`).join('') : '<div class="empty">Aucun échange noté.</div>'}
     <h2>Documents <button class="btn s" data-act="add-doc">+ Ajouter</button></h2>
-    ${docs.length ? `<ul class="list">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>📄 ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Collez le lien Drive d\'un devis ou d\'un contrat.</div>'}`;
+    ${docs.length ? `<ul class="list">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${d.kind === 'video' ? '🎥' : d.kind === 'notes' ? '📝' : '📄'} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Collez le lien Drive d\'un devis ou d\'un contrat.</div>'}`;
 }
 
 function viewSettings() {
-  return `<div class="card"><b>Indicatif pays par défaut</b><p class="muted">Utilisé pour transformer 06 12 34 56 78 en numéro WhatsApp international.</p>
+  return `${googleCard()}<div class="card"><b>Indicatif pays par défaut</b><p class="muted">Utilisé pour transformer 06 12 34 56 78 en numéro WhatsApp international.</p>
       <input id="cc" value="${esc(cc())}" inputmode="numeric" style="max-width:120px"> <small class="muted">33 = France</small></div>
     <div class="card"><b>Sauvegarde</b><p class="muted">Les données sont stockées sur cet appareil. Exportez régulièrement un fichier de sauvegarde, et importez-le pour retrouver vos données sur un autre appareil.</p>
       <div class="row"><button class="btn p" data-act="export">Exporter</button><label class="btn" style="margin:0;color:var(--text)">Importer<input type="file" id="import" accept=".json" hidden></label></div></div>
@@ -247,12 +257,15 @@ function render() {
   let tab = 'today', title = 'Aujourd\'hui', html;
   if (route === 'contacts') { tab = 'contacts'; title = 'Contacts'; html = viewContacts(); }
   else if (route === 'contact') { tab = 'contacts'; title = 'Fiche contact'; html = viewContact(arg); }
+  else if (route === 'meetings') { tab = 'today'; title = 'Réunions Meet'; html = viewMeetings(arg); }
   else if (route === 'settings') { tab = 'settings'; title = 'Réglages'; html = viewSettings(); }
   else html = viewToday();
   $('#title').textContent = title;
   $('#main').innerHTML = html;
   document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
-  $('#fab').hidden = route === 'settings' || route === 'contact';
+  $('#fab').hidden = route === 'settings' || route === 'contact' || route === 'meetings';
+  updateTop();
+  if (route === 'meetings' && G.connected() && ui.meet.items === null && !ui.meet.loading) fetchMeetings();
 }
 
 // ---------- événements ----------
@@ -272,6 +285,12 @@ document.addEventListener('click', async e => {
   else if (act === 'del-note') { if (confirm('Supprimer cet échange ?')) { await remove('notes', id); render(); } }
   else if (act === 'del-doc') { if (confirm('Retirer ce document ?')) { await remove('docs', id); render(); } }
   else if (act === 'filter') { ui.status = el.dataset.s; render(); }
+  else if (act === 'sync') await doSync(true);
+  else if (act === 'google-connect') { await connectGoogle(); }
+  else if (act === 'google-signout') { G.signOut(); ui.sync = { state: 'off' }; ui.meet.items = null; render(); }
+  else if (act === 'meet-refresh') { ui.meet.items = null; ui.meet.error = ''; render(); }
+  else if (act === 'meet-add') await meetAdd(el.dataset);
+  else if (act === 'meet-note') await meetNote(el);
   else if (act === 'export') exportData();
   else if (act === 'wipe') {
     if (confirm('Tout effacer sur cet appareil ?') && confirm('Vraiment ? Pensez à exporter avant.')) {
@@ -285,6 +304,7 @@ document.addEventListener('change', async e => {
     const c = byId('contacts', location.hash.split('/')[2]);
     await save('contacts', { ...c, status: e.target.value }); render();
   } else if (e.target.id === 'cc') localStorage.setItem('cc', e.target.value.replace(/\D/g, '') || '33');
+  else if (e.target.id === 'gcid') { localStorage.setItem('gcid', e.target.value.trim()); render(); }
   else if (e.target.id === 'import') importData(e.target.files[0]);
 });
 document.addEventListener('input', e => {
@@ -311,8 +331,149 @@ async function importData(file) {
   } catch { alert('Fichier de sauvegarde invalide.'); }
 }
 
+
+// ---------- Google : synchro ----------
+ui.sync = { state: 'off', msg: '' };
+ui.meet = { items: null, loading: false, error: '' };
+let syncing = false, syncTimer;
+
+function setSync(state, msg = '') { ui.sync = { state, msg, at: Date.now() }; updateTop(); }
+function updateTop() {
+  const el = $('#topAction');
+  if (!G.configured()) { el.innerHTML = ''; return; }
+  const label = { off: '☁ Connecter', syncing: '☁ Synchro…', ok: '☁ À jour', error: '☁ Erreur' }[ui.sync.state] || '☁';
+  el.innerHTML = `<button class="btn s" data-act="sync" title="${esc(ui.sync.msg)}">${label}</button>`;
+}
+function scheduleSync() {
+  if (!G.configured() || !G.connected()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => doSync(false), 4000);
+}
+function safeRender() {
+  const busy = document.querySelector('dialog[open]') || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
+  busy ? updateTop() : render();
+}
+async function connectGoogle() {
+  try { await G.signIn(); } catch (e) { alert(e.message); setSync('error', e.message); return render(); }
+  await doSync(false);
+  render();
+}
+async function doSync(manual) {
+  if (syncing || !G.configured()) return;
+  if (!G.connected()) {
+    if (!manual) return setSync('off');
+    return connectGoogle();
+  }
+  syncing = true; setSync('syncing');
+  try {
+    const { id, data } = await G.pullRemote();
+    const m = merge(S, data, db.STORES);
+    for (const k of db.STORES) {
+      const keep = new Set(m[k].map(r => r.id));
+      for (const r of S[k]) if (!keep.has(r.id)) await db.del(k, r.id);
+      for (const r of m[k]) if (!S[k].includes(r)) await db.put(k, r);
+      S[k] = m[k];
+    }
+    const known = new Set(S.tombs.map(t => t.id + t.at));
+    for (const t of m.tombs) if (!known.has(t.id + t.at)) await db.put('tombs', t);
+    S.tombs = m.tombs;
+    await G.pushRemote(id, { version: 1, syncedAt: Date.now(), ...m });
+    setSync('ok');
+  } catch (e) {
+    setSync('error', e.message);
+    if (manual) alert('Synchronisation impossible : ' + e.message);
+  } finally {
+    syncing = false;
+    safeRender();
+  }
+}
+
+function googleCard() {
+  const st = ui.sync;
+  const status = !G.configured() ? 'Non configuré' : !G.connected() ? 'Non connecté' : { ok: 'Synchronisé à ' + new Date(st.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }), syncing: 'Synchronisation…', error: 'Erreur : ' + st.msg }[st.state] || 'Connecté';
+  return `<div class="card"><b>Google</b>
+    <p class="muted">Synchronise le CRM entre vos appareils (via votre Drive) et importe les comptes rendus et enregistrements Meet.</p>
+    <label>ID client Google (OAuth)<input id="gcid" value="${esc(localStorage.getItem('gcid') || '')}" placeholder="xxxx.apps.googleusercontent.com"></label>
+    <p class="muted">${esc(status)}</p>
+    ${G.configured() ? `<div class="row">${G.connected() ? '<button class="btn p" data-act="sync">Synchroniser</button><button class="btn" data-act="google-signout">Se déconnecter</button>' : '<button class="btn p" data-act="google-connect">Se connecter avec Google</button>'}</div>` : ''}</div>`;
+}
+
+// ---------- Google : réunions Meet ----------
+const norm = e => (e || '').trim().toLowerCase();
+const kindOf = a => a.mimeType?.startsWith('video/') ? 'video' : a.mimeType === 'application/vnd.google-apps.document' ? 'notes' : null;
+
+async function fetchMeetings() {
+  ui.meet.loading = true;
+  try {
+    const events = await G.recentEvents(45);
+    const byEmail = new Map(S.contacts.filter(c => c.email).map(c => [norm(c.email), c]));
+    const items = [];
+    for (const ev of events) {
+      const atts = (ev.attachments || []).map(a => ({ fileId: a.fileId, title: a.title, url: a.fileUrl, kind: kindOf(a) })).filter(a => a.kind && a.fileId);
+      if (!atts.length) continue;
+      const date = (ev.start?.dateTime || ev.start?.date || '').slice(0, 10);
+      const seen = new Set();
+      for (const at of ev.attendees || []) {
+        const c = !at.self && byEmail.get(norm(at.email));
+        if (c && !seen.has(c.id)) { seen.add(c.id); items.push({ eventId: ev.id, summary: ev.summary || 'Réunion', date, contactId: c.id, atts }); }
+      }
+    }
+    ui.meet.items = items.sort((a, b) => b.date.localeCompare(a.date));
+    ui.meet.error = '';
+  } catch (e) {
+    ui.meet.items = [];
+    ui.meet.error = e.message;
+  } finally {
+    ui.meet.loading = false;
+    if (location.hash.startsWith('#/meetings')) render();
+  }
+}
+function viewMeetings(filterId) {
+  const back = `<p><a href="${filterId ? '#/contact/' + filterId : '#/'}" class="muted">← Retour</a></p>`;
+  if (!G.configured()) return back + '<div class="empty">Google n\'est pas configuré. Voir Réglages.</div>';
+  if (!G.connected()) return back + '<div class="empty">Connectez-vous à Google pour voir vos réunions.<br><br><button class="btn p" data-act="google-connect">Se connecter avec Google</button></div>';
+  if (ui.meet.items === null) return back + '<div class="empty">Chargement des réunions…</div>';
+  const rows = ui.meet.items.filter(i => !filterId || i.contactId === filterId);
+  const noEmail = S.contacts.filter(c => !c.email).length;
+  const refresh = '<p><button class="btn s" data-act="meet-refresh">Actualiser</button></p>';
+  if (ui.meet.error) return back + `<div class="empty late">${esc(ui.meet.error)}</div>${refresh}`;
+  if (!rows.length) return back + `<div class="empty">Aucun compte rendu ni enregistrement trouvé sur les 45 derniers jours.<br><small>Il faut que l'email du contact soit renseigné et qu'il ait été invité à la réunion.${noEmail ? ` (${noEmail} contact(s) sans email)` : ''}</small></div>${refresh}`;
+  return back + refresh + rows.map(i => {
+    const c = byId('contacts', i.contactId);
+    return `<div class="card"><b>${esc(i.summary)}</b><br><small>${fmt(i.date)} · <a href="#/contact/${i.contactId}">${esc(c?.name)}</a></small>
+      ${i.atts.map(a => {
+        const added = S.docs.some(d => d.contactId === i.contactId && d.fileId === a.fileId);
+        const noted = S.notes.some(n => n.contactId === i.contactId && n.fileId === a.fileId);
+        return `<div class="row" style="margin-top:8px;align-items:center"><a class="grow" href="${esc(a.url)}" target="_blank" rel="noopener">${a.kind === 'video' ? '🎥' : '📝'} ${esc(a.title)}</a>
+          ${added ? '<small>✓ Ajouté</small>' : `<button class="btn s" data-act="meet-add" data-ev="${esc(i.eventId)}" data-f="${esc(a.fileId)}" data-c="${i.contactId}">Ajouter aux documents</button>`}
+          ${a.kind === 'notes' ? (noted ? '<small>✓ Dans les échanges</small>' : `<button class="btn s" data-act="meet-note" data-ev="${esc(i.eventId)}" data-f="${esc(a.fileId)}" data-c="${i.contactId}">Copier dans Échanges</button>`) : ''}</div>`;
+      }).join('')}</div>`;
+  }).join('');
+}
+function findMeet(d) {
+  const i = ui.meet.items.find(x => x.eventId === d.ev && x.contactId === d.c);
+  return i && { i, a: i.atts.find(a => a.fileId === d.f) };
+}
+async function meetAdd(d) {
+  const m = findMeet(d); if (!m) return;
+  await save('docs', { id: uid(), contactId: d.c, title: `${m.i.summary} — ${m.a.title}`, url: m.a.url, date: m.i.date, fileId: d.f, kind: m.a.kind });
+  render();
+}
+async function meetNote(btn) {
+  const m = findMeet(btn.dataset); if (!m) return;
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const text = (await G.docText(btn.dataset.f)).trim().slice(0, 30000);
+    await save('notes', { id: uid(), contactId: btn.dataset.c, channel: 'Google Meet', date: m.i.date, text: `${m.i.summary}\n\n${text}`, fileId: btn.dataset.f });
+    const c = byId('contacts', btn.dataset.c);
+    if (c && (!c.lastContact || m.i.date > c.lastContact)) await save('contacts', { ...c, lastContact: m.i.date });
+  } catch (e) { alert('Import impossible : ' + e.message); }
+  render();
+}
+
 window.addEventListener('hashchange', render);
 await load();
 render();
+if (G.configured()) { G.preload().catch(() => {}); if (G.connected()) doSync(false); else setSync('off'); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 navigator.storage?.persist?.();

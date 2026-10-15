@@ -1,11 +1,14 @@
-// Couche de stockage (IndexedDB). Remplaçable plus tard par une synchro cloud.
+// Couche de stockage (IndexedDB).
 const STORES = ['contacts', 'tasks', 'notes', 'docs'];
+const ALL = [...STORES, 'tombs']; // tombs : suppressions à propager lors de la synchro
 let dbp;
 
 function open() {
   return (dbp ||= new Promise((res, rej) => {
-    const r = indexedDB.open('crm', 1);
-    r.onupgradeneeded = () => STORES.forEach(s => r.result.createObjectStore(s, { keyPath: 'id' }));
+    const r = indexedDB.open('crm', 2);
+    r.onupgradeneeded = () => {
+      for (const s of ALL) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s, { keyPath: 'id' });
+    };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   }));
