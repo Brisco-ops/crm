@@ -58,7 +58,7 @@ const cc = () => localStorage.getItem('cc') || '33';
 function waNumber(p) {
   if (!p) return '';
   const plus = p.trim().startsWith('+');
-  let d = p.replace(/\D/g, '');
+  let d = p.replace(/\(0\)/g, '').replace(/\D/g, ''); // ignore le (0) de « +33 (0)6… »
   if (plus) return d;
   if (d.startsWith('00')) return d.slice(2);
   if (d.startsWith('0')) return cc() + d.slice(1);
