@@ -1,4 +1,4 @@
-const CACHE = 'crm-v8';
+const CACHE = 'crm-v9';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'google.js', 'sync.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {

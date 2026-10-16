@@ -79,23 +79,39 @@ export async function pushRemote(id, data) {
 }
 
 // ---- réunions : événements récents avec pièces jointes (comptes rendus, enregistrements) ----
+// Parcourt tous les agendas affichés. Les fonctions visibleCalendars/dédoublonnage sont définies plus bas.
 export async function recentEvents(days = 45) {
-  const items = [];
-  let pageToken = '';
-  do {
-    const u = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
-    u.search = new URLSearchParams({
-      timeMin: new Date(Date.now() - days * 864e5).toISOString(),
-      timeMax: new Date(Date.now() + 864e5).toISOString(),
-      singleEvents: 'true', orderBy: 'startTime', maxResults: '250',
-      fields: 'nextPageToken,items(id,summary,start,attendees(email,self),attachments(fileId,title,mimeType,fileUrl))',
-      ...(pageToken ? { pageToken } : {}),
-    });
-    const j = await (await gfetch(u)).json();
-    items.push(...(j.items || []));
-    pageToken = j.nextPageToken || '';
-  } while (pageToken);
-  return items;
+  const min = new Date(Date.now() - days * 864e5).toISOString(), max = new Date(Date.now() + 864e5).toISOString();
+  const cals = await visibleCalendars();
+  const lists = await Promise.all(cals.map(async c => {
+    try {
+      const items = [];
+      let pageToken = '';
+      do {
+        const u = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(c.id)}/events`);
+        u.search = new URLSearchParams({
+          timeMin: min, timeMax: max, singleEvents: 'true', orderBy: 'startTime', maxResults: '250',
+          fields: 'nextPageToken,items(id,iCalUID,summary,start,attendees(email,self),attachments(fileId,title,mimeType,fileUrl))',
+          ...(pageToken ? { pageToken } : {}),
+        });
+        const j = await (await gfetch(u)).json();
+        items.push(...(j.items || []));
+        pageToken = j.nextPageToken || '';
+      } while (pageToken);
+      return items;
+    } catch (err) {
+      if (c.primary) throw err;
+      return [];
+    }
+  }));
+  // un même événement peut figurer dans plusieurs agendas : on le garde une fois, avec ses pièces jointes
+  const byKey = new Map();
+  for (const e of lists.flat()) {
+    const k = (e.iCalUID || e.id) + '|' + (e.start?.dateTime || e.start?.date);
+    const o = byKey.get(k);
+    if (!o || (!o.attachments?.length && e.attachments?.length)) byKey.set(k, e);
+  }
+  return [...byKey.values()];
 }
 export async function docText(fileId) {
   return (await gfetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`)).text();
