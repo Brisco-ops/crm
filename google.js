@@ -150,3 +150,25 @@ export async function eventsBetween(fromISO, toISO) {
   }
   return out;
 }
+
+// ---- Drive : contenu d'un dossier (fichiers et sous-dossiers) ----
+export async function listFolder(folderId) {
+  if (!/^[\w-]+$/.test(folderId)) throw new Error('Identifiant de dossier invalide');
+  const out = [];
+  let pageToken = '';
+  do {
+    const u = new URL('https://www.googleapis.com/drive/v3/files');
+    u.search = new URLSearchParams({
+      q: `'${folderId}' in parents and trashed = false`, orderBy: 'folder,modifiedTime desc', pageSize: '100',
+      fields: 'nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true',
+      ...(pageToken ? { pageToken } : {}),
+    });
+    const j = await (await gfetch(u)).json();
+    out.push(...(j.files || []).map(f => ({
+      id: f.id, name: f.name, mime: f.mimeType, folder: f.mimeType === 'application/vnd.google-apps.folder',
+      url: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`, date: (f.modifiedTime || '').slice(0, 10),
+    })));
+    pageToken = j.nextPageToken || '';
+  } while (pageToken && out.length < 300);
+  return out;
+}

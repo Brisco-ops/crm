@@ -446,7 +446,7 @@ function viewContact(id) {
   const content = tab === 'tasks'
     ? `<div class="row between"><b>Relances</b><button class="btn s p" data-act="add-task">+ Relance</button></div>${tasks.length ? `<ul class="list" style="margin-top:10px">${tasks.map(t => taskItem(t, false)).join('')}</ul>` : '<div class="empty">Aucune relance.</div>'}`
     : tab === 'docs'
-    ? `<div class="row between"><b>Documents</b><button class="btn s p" data-act="add-doc">+ Document</button></div>${docs.length ? `<ul class="list" style="margin-top:10px">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${docIcon(d)} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Colle le lien Drive d\'un devis ou d\'un contrat.</div>'}`
+    ? `<div class="row between"><b>Documents</b><span class="row">${G.configured() && c.driveUrl ? '<button class="btn s" data-act="drive-import">Importer du Drive</button>' : ''}<button class="btn s p" data-act="add-doc">+ Document</button></span></div>${docs.length ? `<ul class="list" style="margin-top:10px">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${docIcon(d)} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : `<div class="empty">Aucun document. Colle le lien Drive d\'un devis ou d\'un contrat.${G.configured() && !c.driveUrl ? '<br><small>Renseigne le dossier Drive dans la fiche pour importer ses fichiers en un clic.</small>' : ''}</div>`}`
     : `<div class="row between"><b>Activité</b><button class="btn s p" data-act="add-note">+ Note / échange</button></div>
        ${timelineHtml(items)}`;
 
@@ -604,6 +604,7 @@ document.addEventListener('click', async e => {
   else if (act === 'edit-task') addTask(cid, byId('tasks', id));
   else if (act === 'add-note') addNote(cid);
   else if (act === 'add-doc') addDoc(cid);
+  else if (act === 'drive-import') await driveImport(cid);
   else if (act === 'toggle') { navigator.vibrate?.(8); const t = byId('tasks', id); await save('tasks', { ...t, done: !t.done, doneAt: t.done ? null : today() }); render(); }
   else if (act === 'del-note') { if (await confirmSheet('Supprimer cet échange ?')) { await remove('notes', id); render(); } }
   else if (act === 'del-doc') { if (await confirmSheet('Retirer ce document ?', 'Retirer')) { await remove('docs', id); render(); } }
@@ -792,6 +793,60 @@ async function fetchCal() {
     ui.cal.loading = false;
     if (!(location.hash || '#/').replace('#/', '').split('/')[0]) safeRender();
   }
+}
+
+// ---------- Google : import des fichiers du dossier Drive d'un contact ----------
+const folderIdFrom = url => ((url || '').match(/\/folders\/([\w-]+)/) || (url || '').match(/[?&]id=([\w-]+)/) || [])[1] || '';
+async function driveImport(contactId) {
+  const c = byId('contacts', contactId);
+  const root = c && folderIdFrom(c.driveUrl);
+  if (!root) return alert('Le lien du dossier Drive de ce contact n\'est pas reconnu. Colle dans sa fiche le lien d\'un dossier (adresse en …/folders/…).');
+  if (!G.connected()) { try { await G.signIn(); } catch (e) { return alert(e.message); } }
+  const d = document.createElement('dialog');
+  document.body.appendChild(d);
+  const stack = [{ id: root, name: 'Dossier du contact' }], picked = new Set(), meta = new Map();
+  let files = [], err = '', loading = true;
+  const close = () => { d.close(); d.remove(); render(); };
+  const draw = () => {
+    const have = new Set(S.docs.filter(x => x.contactId === contactId).map(x => x.fileId));
+    d.innerHTML = `<form><div class="grab"></div>
+      <div class="sh"><button type="button" class="lnk" data-x>Fermer</button><h3>Importer du Drive</h3><button type="button" class="lnk b" data-add ${picked.size ? '' : 'disabled'}>Ajouter (${picked.size})</button></div>
+      <div class="sb">${stack.length > 1 ? '<button type="button" class="btn s" data-back>← Retour</button> ' : ''}<small class="muted">${esc(stack.map(x => x.name).join(' / '))}</small>
+      ${loading ? '<div class="empty">Chargement…</div>' : err ? `<div class="empty late">${esc(err)}</div>` : files.length
+        ? `<ul class="list" style="margin-top:8px">${files.map(f => f.folder
+          ? `<li data-open="${esc(f.id)}" data-name="${esc(f.name)}" style="cursor:pointer"><span class="grow"><b>📁 ${esc(f.name)}</b></span><small>›</small></li>`
+          : `<li><label class="grow" style="display:flex;gap:10px;align-items:center;margin:0;color:var(--text)"><input type="checkbox" data-pick="${esc(f.id)}" ${have.has(f.id) ? 'checked disabled' : picked.has(f.id) ? 'checked' : ''} style="width:auto;min-height:0"><span class="grow"><b>${esc(f.name)}</b><small>${f.date ? fmt(f.date) : ''}${have.has(f.id) ? ' · déjà ajouté' : ''}</small></span></label></li>`).join('')}</ul>`
+        : '<div class="empty">Ce dossier est vide.</div>'}</div></form>`;
+  };
+  const load = async () => {
+    loading = true; err = ''; draw();
+    try { files = await G.listFolder(stack[stack.length - 1].id); files.forEach(f => meta.set(f.id, f)); } catch (e) { err = e.message; files = []; }
+    loading = false; draw();
+  };
+  d.addEventListener('click', async e => {
+    const t = e.target;
+    if (t.closest('[data-x]') || t === d) return close();
+    if (t.closest('[data-back]')) { stack.pop(); return load(); }
+    const o = t.closest('[data-open]');
+    if (o) { stack.push({ id: o.dataset.open, name: o.dataset.name }); return load(); }
+    if (t.closest('[data-add]') && picked.size) {
+      for (const id of picked) {
+        const f = meta.get(id);
+        if (f) await save('docs', { id: uid(), contactId, title: f.name, url: f.url, date: f.date || today(), fileId: f.id, kind: f.mime.startsWith('video/') ? 'video' : 'file' });
+      }
+      close();
+    }
+  });
+  d.addEventListener('change', e => {
+    const id = e.target.dataset?.pick;
+    if (!id) return;
+    e.target.checked ? picked.add(id) : picked.delete(id);
+    const b = d.querySelector('[data-add]');
+    b.textContent = `Ajouter (${picked.size})`; b.disabled = !picked.size;
+  });
+  d.addEventListener('cancel', () => setTimeout(() => d.remove()));
+  d.showModal();
+  load();
 }
 
 // ---------- Google : réunions Meet ----------
