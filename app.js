@@ -1,8 +1,9 @@
 import * as db from './db.js';
 import * as G from './google.js';
 import { merge } from './sync.js';
+import * as M from './model.js';
 
-const STATUTS = ['Nouveau', 'Contacté', 'RDV planifié', 'Proposition envoyée', 'Gagné', 'Perdu'];
+const STATUTS = M.STAGES.map(s => s.label);
 const CANAUX = ['WhatsApp', 'Google Meet', 'Appel', 'Email', 'En personne'];
 const isOpen = s => s !== 'Gagné' && s !== 'Perdu';
 const badgeClass = s => 'b-' + s.split(' ')[0];
@@ -11,6 +12,13 @@ const $ = (s, r = document) => r.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => crypto.randomUUID();
 const euro = n => (Number(n) || 0).toLocaleString('fr-FR') + ' €';
+const money = (n, cur = 'EUR') => cur === 'XOF' ? (Number(n) || 0).toLocaleString('fr-FR') + ' F CFA' : euro(n);
+const sumMoney = list => {
+  const t = {};
+  for (const c of list) if (c.amount) t[c.currency || 'EUR'] = (t[c.currency || 'EUR'] || 0) + c.amount;
+  const k = Object.keys(t);
+  return k.length ? k.map(cur => money(t[cur], cur)).join(' + ') : euro(0);
+};
 
 // ---------- dates ----------
 const pad = n => String(n).padStart(2, '0');
@@ -33,7 +41,19 @@ const ui = { q: '', status: '', tf: 'open', ct: 'activity', ctId: '', calDate: t
   calView: (() => { try { return localStorage.getItem('calview'); } catch { return null; } })() || ((window.innerWidth || 1000) < 700 ? 'day' : 'week') };
 const byId = (k, id) => S[k].find(x => x.id === id);
 
-async function load() { for (const k of Object.keys(S)) S[k] = await db.all(k); }
+async function load() {
+  for (const k of Object.keys(S)) S[k] = await db.all(k);
+  await upgradeAll();
+}
+// Met tous les enregistrements au format courant (idempotent) : voir model.js / DATA-MODEL.md.
+async function upgradeAll() {
+  for (const k of db.STORES) {
+    for (let i = 0; i < S[k].length; i++) {
+      const r = S[k][i], u = M.upgradeRecord(k, r, cc());
+      if (JSON.stringify(u) !== JSON.stringify(r)) { S[k][i] = u; await db.put(k, u); }
+    }
+  }
+}
 async function save(store, obj) {
   obj.updatedAt = Date.now();
   await db.put(store, obj);
@@ -56,15 +76,7 @@ async function removeContact(id) {
 
 // ---------- liens ----------
 const cc = () => localStorage.getItem('cc') || '33';
-function waNumber(p) {
-  if (!p) return '';
-  const plus = p.trim().startsWith('+');
-  let d = p.replace(/\(0\)/g, '').replace(/\D/g, ''); // ignore le (0) de « +33 (0)6… »
-  if (plus) return d;
-  if (d.startsWith('00')) return d.slice(2);
-  if (d.startsWith('0')) return cc() + d.slice(1);
-  return d;
-}
+const waNumber = p => M.intlDigits(p, cc());
 const waLink = p => (waNumber(p) ? `https://wa.me/${waNumber(p)}` : '');
 function calLink(t, c) {
   const start = t.due.replaceAll('-', '');
@@ -121,12 +133,16 @@ function openForm({ title, fields, values = {}, onSave, onDelete }) {
 }
 
 const contactFields = [
-  { name: 'name', label: 'Nom du contact', required: true },
+  { name: 'firstName', label: 'Prénom' },
+  { name: 'lastName', label: 'Nom', required: true },
+  { name: 'jobTitle', label: 'Poste' },
   { name: 'company', label: 'Entreprise' },
-  { name: 'phone', label: 'Téléphone / WhatsApp', type: 'tel' },
+  { name: 'phone', label: 'Téléphone / WhatsApp (avec +indicatif hors France)', type: 'tel' },
   { name: 'email', label: 'Email', type: 'email' },
   { name: 'status', label: 'Statut', type: 'select', options: STATUTS },
-  { name: 'amount', label: 'Montant potentiel (€)', type: 'number' },
+  { name: 'amount', label: 'Montant potentiel', type: 'number' },
+  { name: 'currency', label: 'Devise', type: 'select', options: M.CURRENCIES },
+  { name: 'entity', label: 'Entité qui facture', type: 'select', options: ['', ...M.ENTITIES] },
   { name: 'source', label: 'Source (recommandation, LinkedIn…)' },
   { name: 'driveUrl', label: 'Dossier Google Drive (lien)', type: 'url' },
   { name: 'notes', label: 'Notes', type: 'textarea' },
@@ -136,9 +152,10 @@ function editContact(c) {
   openForm({
     title: isNew ? 'Nouveau contact' : 'Modifier le contact',
     fields: contactFields,
-    values: c || { status: 'Nouveau' },
+    values: c || { status: 'Nouveau', currency: 'EUR' },
     onSave: async data => {
-      const obj = { ...(c || { id: uid(), createdAt: today() }), ...data, amount: Number(data.amount) || 0 };
+      const base = c || { id: uid(), createdAt: new Date().toISOString() };
+      const obj = M.normalizeContact({ ...base, ...data, amount: Number(data.amount) || 0 }, cc());
       await save('contacts', obj);
       if (isNew) location.hash = '#/contact/' + obj.id;
     },
@@ -235,7 +252,7 @@ function viewToday() {
   const open = S.tasks.filter(t => !t.done).sort((a, b) => a.due.localeCompare(b.due));
   const late = open.filter(t => diff(t.due) < 0);
   const active = S.contacts.filter(c => isOpen(c.status));
-  const pipeline = active.reduce((s, c) => s + (c.amount || 0), 0);
+  const pipeline = sumMoney(active);
   const noAction = active.filter(c => !open.some(t => t.contactId === c.id));
   const byEmail = new Map(S.contacts.filter(c => c.email).map(c => [norm(c.email), c]));
   const days = visibleDays(), td = today();
@@ -272,7 +289,7 @@ function viewToday() {
   return `<div class="stats slim">
       <a class="stat" href="#/contacts"><b>${active.length}</b><small>contacts en cours</small></a>
       <a class="stat ${late.length ? 'alert' : ''}" href="#/tasks"><b>${late.length}</b><small>relances en retard</small></a>
-      <a class="stat" href="#/pipeline"><b>${euro(pipeline)}</b><small>pipeline</small></a></div>
+      <a class="stat" href="#/pipeline"><b>${pipeline}</b><small>pipeline</small></a></div>
     ${note}
     <div class="cal-bar">
       <button class="btn" data-act="calnav" data-n="0">Aujourd'hui</button>
@@ -305,7 +322,7 @@ function contactList() {
     const n = nextTask(c.id);
     return `<tr data-act="open" data-id="${c.id}"><td><div class="row nowrap"><span class="av s">${esc(initials(c.name))}</span><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.company || c.email || '')}</small></div></div></td>
       <td class="hm">${esc(c.company || '')}</td><td><span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></td>
-      <td class="hm">${c.amount ? euro(c.amount) : ''}</td><td class="hm">${c.lastContact ? fmt(c.lastContact) : ''}</td><td class="hm">${n ? dueLabel(n.due) : ''}</td></tr>`;
+      <td class="hm">${c.amount ? money(c.amount, c.currency) : ''}</td><td class="hm">${c.lastContact ? fmt(c.lastContact) : ''}</td><td class="hm">${n ? dueLabel(n.due) : ''}</td></tr>`;
   }).join('')}</tbody></table>`;
 }
 function viewContacts() {
@@ -318,12 +335,11 @@ function viewContacts() {
 function viewPipeline() {
   const cols = STATUTS.map(s => {
     const cs = S.contacts.filter(c => c.status === s).sort((a, b) => (b.amount || 0) - (a.amount || 0));
-    const total = cs.reduce((t, c) => t + (c.amount || 0), 0);
-    return `<section class="col"><header><b>${esc(s)}</b><small>${cs.length} contact${cs.length > 1 ? 's' : ''} · ${euro(total)}</small></header>
+    return `<section class="col"><header><b>${esc(s)}</b><small>${cs.length} contact${cs.length > 1 ? 's' : ''} · ${sumMoney(cs)}</small></header>
       <div class="drop" data-status="${esc(s)}">${cs.map(c => {
         const n = nextTask(c.id);
         return `<a class="kcard ${badgeClass(s).replace('b-', 'k-')}" draggable="true" data-id="${c.id}" href="#/contact/${c.id}"><b>${esc(c.name)}</b><small>${esc(c.company || '')}</small>
-          <div class="row between nowrap" style="margin-top:6px"><span>${c.amount ? euro(c.amount) : ''}</span><small>${n ? dueLabel(n.due) : ''}</small></div></a>`;
+          <div class="row between nowrap" style="margin-top:6px"><span>${c.amount ? money(c.amount, c.currency) : ''}</span><small>${n ? dueLabel(n.due) : ''}</small></div></a>`;
       }).join('') || '<p class="muted nothing">Aucun contact</p>'}</div></section>`;
   }).join('');
   return `<div class="board">${cols}</div><p class="muted hint">Sur ordinateur, glisse une carte vers une autre colonne pour changer son statut. Sur téléphone, ouvre la fiche.</p>`;
@@ -382,7 +398,7 @@ function viewContact(id) {
         <hr>
         <div class="row between"><b>À propos</b><button class="btn s" data-act="edit-contact">Modifier</button></div>
         <div class="prop"><small>Statut</small><select data-act="status">${STATUTS.map(s => `<option ${s === c.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
-        ${prop('Montant potentiel', c.amount ? euro(c.amount) : '')}${prop('Téléphone', esc(c.phone))}${prop('Email', esc(c.email))}${prop('Source', esc(c.source))}
+        ${prop('Montant potentiel', c.amount ? money(c.amount, c.currency) : '')}${prop('Téléphone', esc(c.phone))}${prop('Email', esc(c.email))}${prop('Poste', esc(c.jobTitle))}${prop('Source', esc(c.source))}${prop('Entité', esc(c.entity))}
         ${prop('Dernier contact', c.lastContact ? fmt(c.lastContact) : '')}
         ${prop('Dossier Drive', c.driveUrl ? `<a href="${esc(c.driveUrl)}" target="_blank" rel="noopener">Ouvrir le dossier</a>` : '')}
         ${G.configured() ? `<div class="prop"><a class="btn s" href="#/meetings/${c.id}">Réunions Meet</a></div>` : ''}
@@ -404,6 +420,8 @@ function viewSettings() {
       <input id="cc" value="${esc(cc())}" inputmode="numeric" style="max-width:120px"> <small class="muted">33 = France</small></div>
     <div class="card"><b>Sauvegarde</b><p class="muted">Les données sont stockées sur cet appareil. Exporte régulièrement un fichier de sauvegarde, et importe-le pour retrouver tes données sur un autre appareil.</p>
       <div class="row"><button class="btn p" data-act="export">Exporter</button><label class="btn" style="margin:0;color:var(--text)">Importer<input type="file" id="import" accept=".json" hidden></label></div></div>
+    <div class="card"><b>Changer de CRM</b><p class="muted">Tes données ne sont jamais enfermées : exporte-les dans un format prêt à importer ailleurs (identifiants stables, téléphones au format international, dates normalisées).</p>
+      <div class="row"><button class="btn p" data-act="export-hubspot">HubSpot (ZIP de CSV)</button><button class="btn" data-act="export-csv">Contacts (CSV)</button><button class="btn" data-act="export-json">Complet (JSON)</button></div></div>
     <div class="card"><b>Installer l'application</b><p class="muted">Android/Chrome : menu ⋮ → « Installer l'application ». iPhone/Safari : Partager → « Sur l'écran d'accueil ». Ordinateur : icône d'installation dans la barre d'adresse.</p></div>
     <div class="card"><b>Zone de danger</b><p class="muted">Efface toutes les données de cet appareil.</p><button class="btn d" data-act="wipe">Tout effacer</button></div>`;
 }
@@ -473,6 +491,9 @@ document.addEventListener('click', async e => {
   else if (act === 'meet-refresh') { ui.meet.items = null; ui.meet.error = ''; render(); }
   else if (act === 'meet-add') await meetAdd(el.dataset);
   else if (act === 'meet-note') await meetNote(el);
+  else if (act === 'export-hubspot') { const C = M.toCanonical(S, { cc: cc() }); download(`crm-hubspot-${today()}.zip`, M.zip(M.hubspotFiles(C))); }
+  else if (act === 'export-csv') download(`crm-contacts-${today()}.csv`, new Blob([M.genericContactsCsv(M.toCanonical(S, { cc: cc() }))], { type: 'text/csv' }));
+  else if (act === 'export-json') download(`crm-complet-${today()}.json`, new Blob([JSON.stringify(M.toCanonical(S, { cc: cc() }), null, 2)], { type: 'application/json' }));
   else if (act === 'export') exportData();
   else if (act === 'wipe') {
     if (confirm('Tout effacer sur cet appareil ?') && confirm('Vraiment ? Pense à exporter avant.')) {
@@ -511,6 +532,13 @@ document.addEventListener('input', e => {
   if (e.target.id === 'q') { ui.q = e.target.value; $('#clist').innerHTML = contactList(); }
 });
 
+function download(name, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 function exportData() {
   const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), ...S }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
@@ -578,7 +606,8 @@ async function doSync(manual) {
     const known = new Set(S.tombs.map(t => t.id + t.at));
     for (const t of m.tombs) if (!known.has(t.id + t.at)) await db.put('tombs', t);
     S.tombs = m.tombs;
-    await G.pushRemote(id, { version: 1, syncedAt: Date.now(), ...m });
+    await upgradeAll();
+    await G.pushRemote(id, { version: M.SCHEMA_VERSION, syncedAt: Date.now(), ...Object.fromEntries(db.STORES.map(k => [k, S[k]])), tombs: S.tombs });
     setSync('ok');
   } catch (e) {
     setSync('error', e.message);

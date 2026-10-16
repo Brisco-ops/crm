@@ -1,5 +1,5 @@
-const CACHE = 'crm-v10';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'google.js', 'sync.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
+const CACHE = 'crm-v11';
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'db.js', 'google.js', 'sync.js', 'config.js', 'model.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
