@@ -47,3 +47,18 @@ dialog h3{margin:0 0 4px}
 .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
 .empty{text-align:center;color:var(--muted);padding:26px 10px}
 .note-body{white-space:pre-wrap}
+
+.hello{margin:4px 0 14px}.hello h2{font-size:24px;text-transform:none;letter-spacing:0;color:var(--text);margin:0}
+a.stat{display:block;color:var(--text)}
+.stat.alert{border-color:var(--danger)}.stat.alert b{color:var(--danger)}
+.stat b{font-size:20px}
+h2.dayh{font-size:15px;text-transform:none;letter-spacing:0;color:var(--text);margin:22px 0 8px}
+h2.dayh small{font-weight:400;color:var(--muted);margin-left:6px;text-transform:capitalize}
+h2.dayh.late{color:var(--danger)}
+.row.between{justify-content:space-between;align-items:center;margin-top:22px}
+li.tk{border-left:4px solid var(--warn)}li.tk.lt{border-left-color:var(--danger)}li.tk.done{border-left-color:var(--line)}
+li.ev{border-left:4px solid var(--primary)}li.ev.past{opacity:.5}
+.time{flex:none;width:54px;font-weight:600;font-size:15px;line-height:1.2}.time small{display:block;font-weight:400}
+.nothing{margin:0 0 4px;font-size:14px}
+.card.note{border-style:dashed}
+details summary{cursor:pointer;font-weight:600}

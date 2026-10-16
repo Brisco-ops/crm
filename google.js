@@ -100,3 +100,16 @@ export async function recentEvents(days = 45) {
 export async function docText(fileId) {
   return (await gfetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`)).text();
 }
+
+// ---- planning : événements à venir de l'agenda principal ----
+export async function upcomingEvents(days = 14) {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const u = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
+  u.search = new URLSearchParams({
+    timeMin: start.toISOString(),
+    timeMax: new Date(start.getTime() + (days + 1) * 864e5).toISOString(),
+    singleEvents: 'true', orderBy: 'startTime', maxResults: '100',
+    fields: 'items(id,summary,status,start,end,hangoutLink,htmlLink,location,attendees(email,self,responseStatus))',
+  });
+  return (await (await gfetch(u)).json()).items || [];
+}

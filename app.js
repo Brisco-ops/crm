@@ -165,7 +165,7 @@ const contactName = id => esc(byId('contacts', id)?.name || '—');
 function taskItem(t, showContact = true) {
   const c = byId('contacts', t.contactId);
   const wa = c && waLink(c.phone);
-  return `<li class="${t.done ? 'done' : ''}">
+  return `<li class="tk ${t.done ? 'done' : ''} ${!t.done && diff(t.due) < 0 ? 'lt' : ''}">
     <button class="check" data-act="toggle" data-id="${t.id}" aria-label="Terminer">${t.done ? '✓' : ''}</button>
     <div class="grow"><a class="t" href="#/contact/${t.contactId}" ${showContact ? '' : 'data-act="edit-task" data-id="' + t.id + '"'}><b>${esc(t.text)}</b></a>
       <small>${showContact ? contactName(t.contactId) + ' · ' : ''}${t.done ? 'Fait' : dueLabel(t.due)}</small></div>
@@ -174,22 +174,58 @@ function taskItem(t, showContact = true) {
   </li>`;
 }
 
+const longDate = () => { const t = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }); return t[0].toUpperCase() + t.slice(1); };
+const hhmm = d => new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+function dayHeader(s) {
+  const d = diff(s);
+  const short = new Date(s + 'T00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const name = d === 0 ? 'Aujourd\'hui' : d === 1 ? 'Demain' : short[0].toUpperCase() + short.slice(1);
+  return `<h2 class="dayh">${name}${d <= 1 ? ` <small>${short}</small>` : ''}</h2>`;
+}
+function eventItem(e, byEmail) {
+  const c = e.emails.map(m => byEmail.get(norm(m))).find(Boolean);
+  const past = !e.allDay && new Date(e.end) < new Date();
+  return `<li class="ev ${past ? 'past' : ''}">
+    <div class="time">${e.allDay ? 'Journée' : hhmm(e.start)}${e.allDay ? '' : `<small>${hhmm(e.end)}</small>`}</div>
+    <div class="grow"><a class="t" href="${esc(e.link)}" target="_blank" rel="noopener"><b>${esc(e.title)}</b></a>
+      <small>${c ? `<a href="#/contact/${c.id}">${esc(c.name)}</a>` : (e.location ? esc(e.location) : 'Google Agenda')}</small></div>
+    ${e.meet && !past ? `<a class="btn p s" href="${esc(e.meet)}" target="_blank" rel="noopener">Rejoindre</a>` : ''}
+  </li>`;
+}
+
 function viewToday() {
   const open = S.tasks.filter(t => !t.done).sort((a, b) => a.due.localeCompare(b.due));
-  const late = open.filter(t => diff(t.due) < 0), now = open.filter(t => diff(t.due) === 0), week = open.filter(t => diff(t.due) > 0 && diff(t.due) <= 7);
+  const late = open.filter(t => diff(t.due) < 0);
   const active = S.contacts.filter(c => isOpen(c.status));
   const pipeline = active.reduce((s, c) => s + (c.amount || 0), 0);
   const noAction = active.filter(c => !open.some(t => t.contactId === c.id));
-  const sec = (t, arr) => arr.length ? `<h2>${t} (${arr.length})</h2><ul class="list">${arr.map(x => taskItem(x)).join('')}</ul>` : '';
-  const empty = !late.length && !now.length && !week.length;
-  return `<div class="stats">
-      <div class="stat"><b>${active.length}</b><small>en cours</small></div>
-      <div class="stat"><b class="${late.length ? 'late' : ''}">${late.length}</b><small>en retard</small></div>
-      <div class="stat"><b>${euro(pipeline)}</b><small>pipeline</small></div></div>
-    ${G.configured() ? '<p><a class="btn" href="#/meetings">📝 Réunions Meet récentes</a></p>' : ''}
-    ${sec('En retard', late)}${sec('Aujourd\'hui', now)}${sec('7 prochains jours', week)}
-    ${empty ? '<div class="empty">Aucune relance à venir 🎉<br>Ouvrez un contact pour en planifier une.</div>' : ''}
-    ${noAction.length ? `<h2>Sans prochaine action (${noAction.length})</h2><ul class="list">${noAction.map(c => `<li><a class="grow" href="#/contact/${c.id}"><b>${esc(c.name)}</b><small>${esc(c.company || '')}</small></a><span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></li>`).join('')}</ul>` : ''}`;
+  const byEmail = new Map(S.contacts.filter(c => c.email).map(c => [norm(c.email), c]));
+
+  // planning : relances + événements Google des 14 prochains jours
+  const days = { [today()]: [] };
+  const push = (date, sort, html) => (days[date] ||= []).push({ sort, html });
+  for (const t of open) if (diff(t.due) >= 0 && diff(t.due) <= 14) push(t.due, '0', taskItem(t));
+  for (const e of ui.cal.items || []) if (diff(e.date) >= 0 && diff(e.date) <= 14) push(e.date, e.allDay ? '1' : '2' + e.start, eventItem(e, byEmail));
+  const planning = Object.keys(days).sort().map(d => {
+    const rows = days[d].sort((a, b) => a.sort.localeCompare(b.sort));
+    return dayHeader(d) + (rows.length ? `<ul class="list">${rows.map(r => r.html).join('')}</ul>` : '<p class="muted nothing">Rien de prévu</p>');
+  }).join('');
+
+  let calNote = '';
+  if (G.configured() && !G.connected()) calNote = '<div class="card note">Connectez Google pour voir vos réunions dans le planning.<br><button class="btn p s" data-act="google-connect" style="margin-top:8px">Se connecter avec Google</button></div>';
+  else if (G.connected() && ui.cal.items === null) calNote = '<p class="muted">Chargement des réunions…</p>';
+  else if (ui.cal.error) calNote = `<p class="late">Agenda : ${esc(ui.cal.error)}</p>`;
+
+  return `<div class="hello"><h2>Bonjour 👋</h2><span class="muted">${longDate()}</span></div>
+    <div class="stats">
+      <a class="stat" href="#/contacts"><b>${active.length}</b><small>contacts en cours</small></a>
+      <a class="stat ${late.length ? 'alert' : ''}" href="#/"><b>${late.length}</b><small>en retard</small></a>
+      <a class="stat" href="#/contacts"><b>${euro(pipeline)}</b><small>pipeline</small></a></div>
+    ${late.length ? `<h2 class="dayh late">À traiter en priorité (${late.length})</h2><ul class="list">${late.map(t => taskItem(t)).join('')}</ul>` : ''}
+    <div class="row between"><h2 class="dayh" style="margin:0">Planning</h2>${G.connected() ? '<button class="btn s" data-act="cal-refresh">Actualiser</button>' : ''}</div>
+    ${calNote}${planning}
+    ${noAction.length ? `<details class="card" style="margin-top:20px"><summary>Contacts sans prochaine action (${noAction.length})</summary><ul class="list" style="margin-top:10px">${noAction.map(c => `<li><a class="grow" href="#/contact/${c.id}"><b>${esc(c.name)}</b><small>${esc(c.company || '')}</small></a><span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></li>`).join('')}</ul></details>` : ''}
+    ${G.configured() ? '<p style="margin-top:16px"><a class="btn" href="#/meetings">📝 Comptes rendus de réunions</a></p>' : ''}`;
 }
 
 function contactList() {
@@ -266,6 +302,7 @@ function render() {
   $('#fab').hidden = route === 'settings' || route === 'contact' || route === 'meetings';
   updateTop();
   if (route === 'meetings' && G.connected() && ui.meet.items === null && !ui.meet.loading) fetchMeetings();
+  if (!route && G.connected() && ui.cal.items === null && !ui.cal.loading) fetchCal();
 }
 
 // ---------- événements ----------
@@ -287,7 +324,8 @@ document.addEventListener('click', async e => {
   else if (act === 'filter') { ui.status = el.dataset.s; render(); }
   else if (act === 'sync') await doSync(true);
   else if (act === 'google-connect') { await connectGoogle(); }
-  else if (act === 'google-signout') { G.signOut(); ui.sync = { state: 'off' }; ui.meet.items = null; render(); }
+  else if (act === 'google-signout') { G.signOut(); ui.sync = { state: 'off' }; ui.meet.items = null; ui.cal.items = null; render(); }
+  else if (act === 'cal-refresh') { ui.cal.items = null; ui.cal.error = ''; render(); }
   else if (act === 'meet-refresh') { ui.meet.items = null; ui.meet.error = ''; render(); }
   else if (act === 'meet-add') await meetAdd(el.dataset);
   else if (act === 'meet-note') await meetNote(el);
@@ -335,6 +373,7 @@ async function importData(file) {
 // ---------- Google : synchro ----------
 ui.sync = { state: 'off', msg: '' };
 ui.meet = { items: null, loading: false, error: '' };
+ui.cal = { items: null, loading: false, error: '' };
 let syncing = false, syncTimer;
 
 function setSync(state, msg = '') { ui.sync = { state, msg, at: Date.now() }; updateTop(); }
@@ -396,6 +435,29 @@ function googleCard() {
     <label>ID client Google (OAuth)<input id="gcid" value="${esc(localStorage.getItem('gcid') || '')}" placeholder="xxxx.apps.googleusercontent.com"></label>
     <p class="muted">${esc(status)}</p>
     ${G.configured() ? `<div class="row">${G.connected() ? '<button class="btn p" data-act="sync">Synchroniser</button><button class="btn" data-act="google-signout">Se déconnecter</button>' : '<button class="btn p" data-act="google-connect">Se connecter avec Google</button>'}</div>` : ''}</div>`;
+}
+
+// ---------- Google : planning ----------
+async function fetchCal() {
+  ui.cal.loading = true;
+  try {
+    ui.cal.items = (await G.upcomingEvents(14))
+      .filter(e => e.status !== 'cancelled' && !(e.attendees || []).some(a => a.self && a.responseStatus === 'declined'))
+      .map(e => ({
+        id: e.id, title: e.summary || '(Sans titre)', allDay: !e.start.dateTime,
+        date: (e.start.dateTime ? toStr(new Date(e.start.dateTime)) : e.start.date),
+        start: e.start.dateTime || '', end: e.end?.dateTime || '',
+        meet: e.hangoutLink || '', link: e.htmlLink, location: e.location || '',
+        emails: (e.attendees || []).filter(a => !a.self).map(a => a.email),
+      }));
+    ui.cal.error = '';
+  } catch (err) {
+    ui.cal.items = [];
+    ui.cal.error = err.message;
+  } finally {
+    ui.cal.loading = false;
+    if (!(location.hash || '#/').replace('#/', '').split('/')[0]) safeRender();
+  }
 }
 
 // ---------- Google : réunions Meet ----------
