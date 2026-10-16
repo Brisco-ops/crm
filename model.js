@@ -4,7 +4,7 @@
 // Export : on traduit ce stockage vers un modèle canonique proche de HubSpot
 //          (sociétés / contacts / affaires / activités / tâches), puis vers des CSV d'import.
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // Étapes du pipeline. `label` est la valeur stockée ; le reste sert uniquement aux exports.
 // dealstage = identifiants internes du pipeline HubSpot par défaut (à adapter si le portail est personnalisé).
@@ -19,7 +19,7 @@ export const STAGES = [
 export const ENTITIES = ['France', 'Togo'];       // entité qui facture (ajouter « SASU » le moment venu)
 export const CURRENCIES = ['EUR', 'XOF'];
 const CHANNEL_TYPE = { 'WhatsApp': 'whatsapp', 'Google Meet': 'meeting', 'En personne': 'meeting', 'Appel': 'call', 'Email': 'email' };
-const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|orange|wanadoo|free|sfr|laposte|neuf|bbox|proton|protonmail|gmx|aol)\./i;
+export const FREE_MAIL = /^(gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|icloud|me|orange|wanadoo|free|sfr|laposte|neuf|bbox|proton|protonmail|gmx|aol)\./i;
 
 export const stageOf = label => STAGES.find(s => s.label === label) || STAGES[0];
 
@@ -65,10 +65,25 @@ export function normalizeContact(c, cc = '33') {
 // Met un enregistrement au format courant (idempotent). Ne touche pas à updatedAt.
 export function upgradeRecord(store, r, cc = '33') {
   if (store === 'contacts') return normalizeContact(r, cc);
+  if (store === 'companies') return normalizeCompany(r);
   if (store === 'tombs') return r;
   const created = isoFrom(r.createdAt) || (store === 'tasks' ? '' : isoFrom(r.date)) || isoFrom(r.updatedAt) || new Date().toISOString();
   return r.createdAt === created ? r : { ...r, createdAt: created };
 }
+
+export function cleanDomain(d) {
+  return (d || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split(/[\/?#]/)[0];
+}
+export function normalizeCompany(c) {
+  const o = { ...c };
+  o.name = (o.name || '').trim();
+  o.domain = cleanDomain(o.domain);
+  o.employees = o.employees === '' || o.employees == null ? '' : (Number(o.employees) || '');
+  o.createdAt = isoFrom(o.createdAt) || isoFrom(o.updatedAt) || new Date().toISOString();
+  return o;
+}
+// Une affaire existe dès « RDV planifié » ou dès qu'un montant est saisi.
+export const hasDeal = c => !!stageOf(c.status).dealstage || (c.amount || 0) > 0;
 
 // ---------- identifiants stables ----------
 function hash(s) {
@@ -76,23 +91,31 @@ function hash(s) {
   for (let i = 0; i < s.length; i++) { h1 = Math.imul(h1 ^ s.charCodeAt(i), 16777619); h2 = Math.imul(h2 + s.charCodeAt(i), 2246822519); }
   return ((h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0'));
 }
-const coId = name => 'co_' + hash(name.trim().toLowerCase());
+export const coId = name => 'co_' + hash(name.trim().toLowerCase());
 
 // ---------- modèle canonique ----------
 export function toCanonical(S, { cc = '33' } = {}) {
   const contacts = S.contacts.map(c => normalizeContact(c, cc));
   const warnings = [];
 
-  // sociétés : dédoublonnées par nom
+  // sociétés : celles de la base, plus (par sécurité) celles déduites de contacts non rattachés
   const companies = new Map();
-  for (const c of contacts) {
+  for (const raw of S.companies || []) {
+    const co = normalizeCompany(raw);
+    companies.set(co.id, { id: co.id, name: co.name, domain: co.domain, phone: co.phone || '', industry: co.industry || '', city: co.city || '', country: co.country || '',
+      employees: co.employees, description: co.notes || '', driveFolderUrl: co.driveUrl || '', createdAt: co.createdAt, updatedAt: isoFrom(co.updatedAt) || co.createdAt, externalIds: co.ext || {} });
+  }
+  const companyIdOf = c => {
+    if (c.companyId && companies.has(c.companyId)) return c.companyId;
     const nm = (c.company || '').trim();
-    if (!nm) continue;
+    if (!nm) return '';
     const id = coId(nm);
-    const dom = c.email.split('@')[1] || '';
-    const co = companies.get(id) || { id, name: nm, domain: '', externalIds: {} };
-    if (!co.domain && dom && !FREE_MAIL.test(dom)) co.domain = dom;
-    companies.set(id, co);
+    if (!companies.has(id)) companies.set(id, { id, name: nm, domain: '', phone: '', industry: '', city: '', country: '', employees: '', description: '', driveFolderUrl: '', createdAt: c.createdAt, updatedAt: c.createdAt, externalIds: {} });
+    return id;
+  };
+  for (const c of contacts) {
+    const co = companies.get(companyIdOf(c)), dom = c.email.split('@')[1] || '';
+    if (co && !co.domain && dom && !FREE_MAIL.test(dom)) co.domain = dom;
   }
 
   const outContacts = contacts.map(c => {
@@ -100,7 +123,7 @@ export function toCanonical(S, { cc = '33' } = {}) {
     if (!c.email) warnings.push(`Contact sans email : ${c.name} (rattachement manuel à prévoir lors de l'import)`);
     return {
       id: c.id, firstName: c.firstName, lastName: c.lastName, email: c.email, phone: c.phone || '', phoneE164: c.phoneE164,
-      jobTitle: c.jobTitle || '', companyId: c.company ? coId(c.company) : '', companyName: c.company || '',
+      jobTitle: c.jobTitle || '', companyId: companyIdOf(c), companyName: companies.get(companyIdOf(c))?.name || c.company || '',
       lifecycleStage: st.lifecycle, leadStatus: st.leadStatus, stage: st.key, source: c.source || '',
       entity: c.entity || '', driveFolderUrl: c.driveUrl || '', notes: c.notes || '',
       createdAt: c.createdAt, updatedAt: isoFrom(c.updatedAt) || c.createdAt, externalIds: c.ext || {},
@@ -116,7 +139,7 @@ export function toCanonical(S, { cc = '33' } = {}) {
     if (!st.dealstage && !(c.amount > 0)) continue;
     const dealstage = st.dealstage || 'appointmentscheduled';
     deals.push({
-      id: 'deal_' + c.id, name: `${c.company || c.name} — ${c.name}`.slice(0, 120), contactId: c.id, companyId: c.company ? coId(c.company) : '',
+      id: 'deal_' + c.id, name: `${c.company || c.name} — ${c.name}`.slice(0, 120), contactId: c.id, companyId: companyIdOf(c),
       stage: st.key, hubspotStage: dealstage, pipeline: 'default', amount: c.amount || 0, currency: c.currency,
       entity: c.entity || '', isClosed: !!st.closed, isWon: !!st.won,
       closeDate: st.closed ? isoFrom(lastAct.get(c.id) || c.lastContact || c.updatedAt) : '',
@@ -156,7 +179,10 @@ export function hubspotFiles(C) {
   const emailOf = new Map(C.contacts.map(c => [c.id, c.email]));
   const assoc = id => ({ associated_contact_email: emailOf.get(id) || '', associated_contact_mon_crm_id: id });
   const files = {};
-  files['1-societes.csv'] = csv(['mon_crm_id', 'name', 'domain'], C.companies.map(c => ({ mon_crm_id: c.id, name: c.name, domain: c.domain })));
+  // `industry` est une liste fermée dans HubSpot : le secteur saisi va dans une propriété personnalisée.
+  files['1-societes.csv'] = csv(['mon_crm_id', 'name', 'domain', 'phone', 'city', 'country', 'numberofemployees', 'description', 'mon_crm_secteur', 'mon_crm_dossier_drive'],
+    C.companies.map(c => ({ mon_crm_id: c.id, name: c.name, domain: c.domain, phone: c.phone, city: c.city, country: c.country, numberofemployees: c.employees,
+      description: c.description, mon_crm_secteur: c.industry, mon_crm_dossier_drive: c.driveFolderUrl })));
   files['2-contacts.csv'] = csv(
     ['mon_crm_id', 'firstname', 'lastname', 'email', 'phone', 'jobtitle', 'company', 'lifecyclestage', 'hs_lead_status', 'mon_crm_source', 'mon_crm_entite', 'mon_crm_dossier_drive'],
     C.contacts.map(c => ({ mon_crm_id: c.id, firstname: c.firstName, lastname: c.lastName, email: c.email, phone: c.phoneE164 || c.phone, jobtitle: c.jobTitle,
@@ -190,7 +216,7 @@ export function hubspotFiles(C) {
     '',
     "ORDRE D'IMPORT (HubSpot > Importer) : 1 sociétés, 2 contacts, 3 affaires, puis les activités 4 à 7.",
     "Avant l'import, créer les propriétés personnalisées : mon_crm_id (texte, valeur unique) sur chaque objet,",
-    'mon_crm_source, mon_crm_entite, mon_crm_dossier_drive sur les contacts, mon_crm_entite sur les affaires.',
+    'mon_crm_source, mon_crm_entite, mon_crm_dossier_drive sur les contacts, mon_crm_secteur et mon_crm_dossier_drive sur les sociétés, mon_crm_entite sur les affaires.',
     "Les colonnes associated_contact_email / associated_contact_mon_crm_id servent à rattacher affaires et activités à leur contact :",
     "les mapper sur les colonnes d'association proposées par l'assistant d'import.",
     "Les étapes d'affaire (dealstage) correspondent au pipeline par défaut de HubSpot ; si votre pipeline est personnalisé, adaptez la colonne.",

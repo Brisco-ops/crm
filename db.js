@@ -1,11 +1,11 @@
 // Couche de stockage (IndexedDB).
-const STORES = ['contacts', 'tasks', 'notes', 'docs'];
+const STORES = ['contacts', 'companies', 'tasks', 'notes', 'docs'];
 const ALL = [...STORES, 'tombs']; // tombs : suppressions à propager lors de la synchro
 let dbp;
 
 function open() {
   return (dbp ||= new Promise((res, rej) => {
-    const r = indexedDB.open('crm', 2);
+    const r = indexedDB.open('crm', 3);
     r.onupgradeneeded = () => {
       for (const s of ALL) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s, { keyPath: 'id' });
     };

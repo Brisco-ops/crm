@@ -36,14 +36,37 @@ function dueLabel(s) {
 }
 
 // ---------- état ----------
-const S = { contacts: [], tasks: [], notes: [], docs: [], tombs: [] };
-const ui = { q: '', status: '', tf: 'open', ct: 'activity', ctId: '', calDate: toStr(new Date()),
+const S = { contacts: [], companies: [], tasks: [], notes: [], docs: [], tombs: [] };
+const ui = { q: '', cq: '', status: '', tf: 'open', ct: 'activity', ctId: '', cot: 'contacts', coId: '', calDate: toStr(new Date()),
   calView: (() => { try { return localStorage.getItem('calview'); } catch { return null; } })() || ((window.innerWidth || 1000) < 700 ? 'day' : 'week') };
 const byId = (k, id) => S[k].find(x => x.id === id);
 
 async function load() {
   for (const k of Object.keys(S)) S[k] = await db.all(k);
   await upgradeAll();
+}
+// Rattache chaque contact à une entreprise stockée. Identifiants déterministes (nom) : deux appareils
+// qui migrent en même temps créent la même entreprise, la synchro les fusionne sans doublon.
+async function ensureCompany(name, email = '') {
+  name = (name || '').trim();
+  if (!name) return null;
+  const id = M.coId(name);
+  let co = byId('companies', id) || S.companies.find(c => c.name.toLowerCase() === name.toLowerCase());
+  if (!co) {
+    const dom = (email.split('@')[1] || '').toLowerCase();
+    co = M.normalizeCompany({ id, name, domain: dom && !M.FREE_MAIL.test(dom) ? dom : '', createdAt: new Date().toISOString() });
+    await save('companies', co);
+  }
+  return co;
+}
+async function linkCompanies() {
+  for (const c of S.contacts.slice()) {
+    const nm = (c.company || '').trim();
+    let co = c.companyId && byId('companies', c.companyId);
+    if (!co && nm) co = await ensureCompany(nm, c.email);
+    if (co && (c.companyId !== co.id || c.company !== co.name)) await save('contacts', { ...c, companyId: co.id, company: co.name });
+    else if (!co && c.companyId) await save('contacts', { ...c, companyId: '' });
+  }
 }
 // Met tous les enregistrements au format courant (idempotent) : voir model.js / DATA-MODEL.md.
 async function upgradeAll() {
@@ -53,6 +76,7 @@ async function upgradeAll() {
       if (JSON.stringify(u) !== JSON.stringify(r)) { S[k][i] = u; await db.put(k, u); }
     }
   }
+  await linkCompanies();
 }
 async function save(store, obj) {
   obj.updatedAt = Date.now();
@@ -89,6 +113,7 @@ function calLink(t, c) {
 function field(f, v) {
   const val = v ?? f.default ?? '';
   const req = f.required ? 'required' : '';
+  if (f.type === 'company') return `<label>${f.label}<input name="${f.name}" value="${esc(val)}" list="cos" autocomplete="off"></label><datalist id="cos">${S.companies.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>`;
   if (f.type === 'select') return `<label>${f.label}<select name="${f.name}">${f.options.map(o => `<option ${o === val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></label>`;
   if (f.type === 'textarea') return `<label>${f.label}<textarea name="${f.name}" rows="${f.rows || 3}" ${req}>${esc(val)}</textarea></label>`;
   return `<label>${f.label}<input name="${f.name}" type="${f.type || 'text'}" value="${esc(val)}" ${req} ${f.type === 'tel' ? 'inputmode="tel"' : ''}></label>`;
@@ -136,7 +161,7 @@ const contactFields = [
   { name: 'firstName', label: 'Prénom' },
   { name: 'lastName', label: 'Nom', required: true },
   { name: 'jobTitle', label: 'Poste' },
-  { name: 'company', label: 'Entreprise' },
+  { name: 'company', label: 'Entreprise (existante ou nouvelle)', type: 'company' },
   { name: 'phone', label: 'Téléphone / WhatsApp (avec +indicatif hors France)', type: 'tel' },
   { name: 'email', label: 'Email', type: 'email' },
   { name: 'status', label: 'Statut', type: 'select', options: STATUTS },
@@ -147,19 +172,54 @@ const contactFields = [
   { name: 'driveUrl', label: 'Dossier Google Drive (lien)', type: 'url' },
   { name: 'notes', label: 'Notes', type: 'textarea' },
 ];
-function editContact(c) {
+function editContact(c, preset) {
   const isNew = !c;
   openForm({
     title: isNew ? 'Nouveau contact' : 'Modifier le contact',
     fields: contactFields,
-    values: c || { status: 'Nouveau', currency: 'EUR' },
+    values: c || { status: 'Nouveau', currency: 'EUR', ...(preset || {}) },
     onSave: async data => {
       const base = c || { id: uid(), createdAt: new Date().toISOString() };
-      const obj = M.normalizeContact({ ...base, ...data, amount: Number(data.amount) || 0 }, cc());
+      const co = await ensureCompany(data.company, data.email);
+      const obj = M.normalizeContact({ ...base, ...data, amount: Number(data.amount) || 0, companyId: co?.id || '', company: co?.name || '' }, cc());
       await save('contacts', obj);
       if (isNew) location.hash = '#/contact/' + obj.id;
     },
     onDelete: isNew ? null : async () => { await removeContact(c.id); location.hash = '#/contacts'; },
+  });
+}
+const companyFields = [
+  { name: 'name', label: 'Nom de l\'entreprise', required: true },
+  { name: 'domain', label: 'Site web / domaine (ex : dupont-pain.fr)' },
+  { name: 'phone', label: 'Téléphone', type: 'tel' },
+  { name: 'industry', label: 'Secteur d\'activité' },
+  { name: 'city', label: 'Ville' },
+  { name: 'country', label: 'Pays' },
+  { name: 'employees', label: 'Effectif', type: 'number' },
+  { name: 'driveUrl', label: 'Dossier Google Drive (lien)', type: 'url' },
+  { name: 'notes', label: 'Notes', type: 'textarea' },
+];
+function editCompany(co) {
+  const isNew = !co;
+  openForm({
+    title: isNew ? 'Nouvelle entreprise' : 'Modifier l\'entreprise',
+    fields: companyFields,
+    values: co || {},
+    onSave: async data => {
+      let obj;
+      if (isNew) {
+        const id = M.coId(data.name), ex = byId('companies', id);
+        obj = M.normalizeCompany({ ...(ex || { id, createdAt: new Date().toISOString() }), ...data });
+      } else obj = M.normalizeCompany({ ...co, ...data });
+      await save('companies', obj);
+      for (const c of S.contacts.filter(c => c.companyId === obj.id && c.company !== obj.name)) await save('contacts', { ...c, company: obj.name });
+      if (isNew) location.hash = '#/company/' + obj.id;
+    },
+    onDelete: isNew ? null : async () => {
+      for (const c of S.contacts.filter(c => c.companyId === co.id)) await save('contacts', { ...c, companyId: '', company: '' });
+      await remove('companies', co.id);
+      location.hash = '#/companies';
+    },
   });
 }
 function addTask(contactId, t) {
@@ -357,6 +417,20 @@ function viewTasks() {
     ${list.length ? `<ul class="list">${list.map(t => taskItem(t)).join('')}</ul>` : '<div class="empty">Aucune tâche ici.<br><small>Ajoute une relance depuis la fiche d\'un contact.</small></div>'}`;
 }
 
+function activityItems(ids, withWho = false) {
+  const set = new Set(ids), who = id => withWho ? ' · ' + (byId('contacts', id)?.name || '') : '';
+  return [
+    ...S.notes.filter(n => set.has(n.contactId)).map(n => ({ date: n.date, ico: CH_ICON[n.channel] || '💬', title: n.channel + who(n.contactId),
+      body: n.text.length > 400 ? `<details><summary>${esc(n.text.slice(0, 200))}…</summary><div class="note-body">${esc(n.text)}</div></details>` : `<div class="note-body">${esc(n.text)}</div>`,
+      del: `<a href="#" data-act="del-note" data-id="${n.id}" class="muted">supprimer</a>` })),
+    ...S.docs.filter(d => set.has(d.contactId)).map(d => ({ date: d.date, ico: docIcon(d), title: 'Document ajouté' + who(d.contactId), body: `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>` })),
+    ...S.tasks.filter(t => set.has(t.contactId) && t.done).map(t => ({ date: t.doneAt || t.due, ico: '✅', title: 'Relance terminée' + who(t.contactId), body: esc(t.text) })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+}
+const timelineHtml = items => items.length
+  ? `<div class="tl">${items.map(i => `<div class="item"><span class="ico">${i.ico}</span><div class="grow card"><div class="row between nowrap"><b>${esc(i.title)}</b><small>${fmt(i.date)} ${i.del || ''}</small></div>${i.body}</div></div>`).join('')}</div>`
+  : '<div class="empty">Aucune activité pour le moment.</div>';
+
 function viewContact(id) {
   const c = byId('contacts', id);
   if (!c) return '<div class="empty">Contact introuvable. <a href="#/contacts">Retour</a></div>';
@@ -366,13 +440,7 @@ function viewContact(id) {
   const wa = waLink(c.phone);
   const openTasks = tasks.filter(t => !t.done);
 
-  const items = [
-    ...notes.map(n => ({ date: n.date, ico: CH_ICON[n.channel] || '💬', title: n.channel,
-      body: n.text.length > 400 ? `<details><summary>${esc(n.text.slice(0, 200))}…</summary><div class="note-body">${esc(n.text)}</div></details>` : `<div class="note-body">${esc(n.text)}</div>`,
-      del: `<a href="#" data-act="del-note" data-id="${n.id}" class="muted">supprimer</a>` })),
-    ...docs.map(d => ({ date: d.date, ico: docIcon(d), title: 'Document ajouté', body: `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>` })),
-    ...tasks.filter(t => t.done).map(t => ({ date: t.doneAt || t.due, ico: '✅', title: 'Relance terminée', body: esc(t.text) })),
-  ].sort((a, b) => b.date.localeCompare(a.date));
+  const items = activityItems([id]);
 
   const tab = ui.ct;
   const content = tab === 'tasks'
@@ -380,13 +448,13 @@ function viewContact(id) {
     : tab === 'docs'
     ? `<div class="row between"><b>Documents</b><button class="btn s p" data-act="add-doc">+ Document</button></div>${docs.length ? `<ul class="list" style="margin-top:10px">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${docIcon(d)} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Colle le lien Drive d\'un devis ou d\'un contrat.</div>'}`
     : `<div class="row between"><b>Activité</b><button class="btn s p" data-act="add-note">+ Note / échange</button></div>
-       ${items.length ? `<div class="tl">${items.map(i => `<div class="item"><span class="ico">${i.ico}</span><div class="grow card"><div class="row between nowrap"><b>${esc(i.title)}</b><small>${fmt(i.date)} ${i.del || ''}</small></div>${i.body}</div></div>`).join('')}</div>` : '<div class="empty">Aucune activité. Note ton premier échange.</div>'}`;
+       ${timelineHtml(items)}`;
 
   const prop = (k, v) => v ? `<div class="prop"><small>${k}</small><div>${v}</div></div>` : '';
   return `<p><a href="#/contacts" class="muted">← Contacts</a></p>
     <div class="record">
       <aside class="card">
-        <div class="row nowrap" style="align-items:center"><span class="av">${esc(initials(c.name))}</span><div class="grow"><b style="font-size:18px">${esc(c.name)}</b><br><span class="muted">${esc(c.company || '')}</span></div></div>
+        <div class="row nowrap" style="align-items:center"><span class="av">${esc(initials(c.name))}</span><div class="grow"><b style="font-size:18px">${esc(c.name)}</b><br>${c.companyId ? `<a href="#/company/${c.companyId}" class="muted">${esc(c.company)}</a>` : ''}</div></div>
         <div class="qa">
           <button class="qbtn" data-act="add-note"><i>📝</i>Note</button>
           <button class="qbtn" data-act="add-task"><i>✅</i>Relance</button>
@@ -415,6 +483,64 @@ function viewContact(id) {
     </div>`;
 }
 
+const coInitials = n => initials(n).slice(0, 2);
+function companyRows(co) {
+  const cs = S.contacts.filter(c => c.companyId === co.id), open = cs.filter(c => isOpen(c.status));
+  const last = cs.map(c => c.lastContact || '').sort().pop();
+  return { cs, open, last };
+}
+function companyList() {
+  const q = ui.cq.trim().toLowerCase();
+  const list = S.companies.filter(c => !q || [c.name, c.domain, c.city, c.industry].some(v => (v || '').toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  if (!list.length) return `<div class="empty">${S.companies.length ? 'Aucun résultat.' : 'Aucune entreprise pour l\'instant.<br>Elles se créent aussi toutes seules quand tu en renseignes une dans une fiche contact.'}</div>`;
+  return `<table class="tbl"><thead><tr><th>Nom</th><th class="hm">Domaine</th><th>Contacts</th><th class="hm">Pipeline</th><th class="hm">Secteur</th><th class="hm">Dernier contact</th></tr></thead><tbody>${list.map(co => {
+    const r = companyRows(co);
+    return `<tr data-act="open-company" data-id="${co.id}"><td><div class="row nowrap"><span class="av s sq">${esc(coInitials(co.name))}</span><div class="grow"><b>${esc(co.name)}</b><small>${esc(co.city || co.domain || '')}</small></div></div></td>
+      <td class="hm">${esc(co.domain)}</td><td>${r.cs.length}</td><td class="hm">${r.open.length ? sumMoney(r.open) : ''}</td><td class="hm">${esc(co.industry || '')}</td><td class="hm">${r.last ? fmt(r.last) : ''}</td></tr>`;
+  }).join('')}</tbody></table>`;
+}
+function viewCompanies() {
+  return `<div class="row between" style="margin:0 0 10px"><input id="cq" type="search" placeholder="Rechercher une entreprise…" value="${esc(ui.cq)}" style="max-width:420px"><button class="btn p" data-act="new-company">+ Nouvelle entreprise</button></div>
+    <div id="colist">${companyList()}</div>`;
+}
+function viewCompany(id) {
+  const co = byId('companies', id);
+  if (!co) return '<div class="empty">Entreprise introuvable. <a href="#/companies">Retour</a></div>';
+  const { cs } = companyRows(co), tab = ui.cot;
+  const deals = cs.filter(M.hasDeal);
+  const prop = (k, v) => v ? `<div class="prop"><small>${k}</small><div>${v}</div></div>` : '';
+  const content = tab === 'deals'
+    ? `<div class="row between"><b>Affaires</b></div>${deals.length ? `<ul class="list" style="margin-top:10px">${deals.map(c => `<li><a class="grow" href="#/contact/${c.id}"><b>${esc(co.name)} — ${esc(c.name)}</b><small>${c.amount ? money(c.amount, c.currency) : 'Sans montant'}</small></a><span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></li>`).join('')}</ul>` : '<div class="empty">Aucune affaire. Elle apparaît dès qu\'un contact atteint « RDV planifié » ou qu\'un montant est saisi.</div>'}`
+    : tab === 'activity'
+    ? `<div class="row between"><b>Activité de l\'entreprise</b></div>${timelineHtml(activityItems(cs.map(c => c.id), true))}`
+    : `<div class="row between"><b>Contacts</b><button class="btn s p" data-act="add-company-contact">+ Contact</button></div>${cs.length ? `<ul class="list" style="margin-top:10px">${cs.map(c => `<li><span class="av s">${esc(initials(c.name))}</span><a class="grow" href="#/contact/${c.id}"><b>${esc(c.name)}</b><small>${esc(c.jobTitle || c.email || '')}</small></a><span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></li>`).join('')}</ul>` : '<div class="empty">Aucun contact rattaché.</div>'}`;
+  return `<p><a href="#/companies" class="muted">← Entreprises</a></p>
+    <div class="record">
+      <aside class="card">
+        <div class="row nowrap" style="align-items:center"><span class="av sq">${esc(coInitials(co.name))}</span><div class="grow"><b style="font-size:18px">${esc(co.name)}</b><br>${co.domain ? `<a class="muted" href="https://${esc(co.domain)}" target="_blank" rel="noopener">${esc(co.domain)}</a>` : ''}</div></div>
+        <div class="qa">
+          <button class="qbtn" data-act="add-company-contact"><i>👤</i>Contact</button>
+          ${co.phone ? `<a class="qbtn" href="tel:${esc(co.phone)}"><i>📞</i>Appeler</a>` : ''}
+          ${co.domain ? `<a class="qbtn" href="https://${esc(co.domain)}" target="_blank" rel="noopener"><i>🌐</i>Site</a>` : ''}
+          ${co.driveUrl ? `<a class="qbtn" href="${esc(co.driveUrl)}" target="_blank" rel="noopener"><i>📁</i>Drive</a>` : ''}
+        </div>
+        <hr>
+        <div class="row between"><b>À propos</b><button class="btn s" data-act="edit-company">Modifier</button></div>
+        ${prop('Téléphone', esc(co.phone))}${prop('Secteur', esc(co.industry))}${prop('Ville', esc([co.city, co.country].filter(Boolean).join(', ')))}${prop('Effectif', co.employees ? esc(co.employees) : '')}
+        ${prop('Pipeline en cours', cs.some(c => isOpen(c.status) && c.amount) ? sumMoney(cs.filter(c => isOpen(c.status))) : '')}
+        ${co.notes ? `<hr><small class="muted">Notes</small><p class="note-body" style="margin:4px 0 0">${esc(co.notes)}</p>` : ''}
+      </aside>
+      <section>
+        <div class="ctabs">
+          <button class="${tab === 'contacts' ? 'on' : ''}" data-act="cotab" data-t="contacts">Contacts (${cs.length})</button>
+          <button class="${tab === 'deals' ? 'on' : ''}" data-act="cotab" data-t="deals">Affaires (${deals.length})</button>
+          <button class="${tab === 'activity' ? 'on' : ''}" data-act="cotab" data-t="activity">Activité</button>
+        </div>
+        <div class="card" style="margin-top:10px">${content}</div>
+      </section>
+    </div>`;
+}
+
 function viewSettings() {
   return `${googleCard()}<div class="card"><b>Indicatif pays par défaut</b><p class="muted">Utilisé pour transformer 06 12 34 56 78 en numéro WhatsApp international.</p>
       <input id="cc" value="${esc(cc())}" inputmode="numeric" style="max-width:120px"> <small class="muted">33 = France</small></div>
@@ -433,6 +559,8 @@ function render() {
   let tab = 'today', title = 'Accueil', html;
   if (route === 'contacts') { tab = 'contacts'; title = 'Contacts'; html = viewContacts(); }
   else if (route === 'contact') { tab = 'contacts'; title = 'Fiche contact'; if (ui.ctId !== arg) { ui.ctId = arg; ui.ct = 'activity'; } html = viewContact(arg); }
+  else if (route === 'companies') { tab = 'companies'; title = 'Entreprises'; html = viewCompanies(); }
+  else if (route === 'company') { tab = 'companies'; title = 'Fiche entreprise'; if (ui.coId !== arg) { ui.coId = arg; ui.cot = 'contacts'; } html = viewCompany(arg); }
   else if (route === 'pipeline') { tab = 'pipeline'; title = 'Pipeline'; html = viewPipeline(); }
   else if (route === 'tasks') { tab = 'tasks'; title = 'Tâches'; html = viewTasks(); }
   else if (route === 'meetings') { tab = 'today'; title = 'Réunions Meet'; html = viewMeetings(arg); }
@@ -445,7 +573,9 @@ function render() {
   m.classList.toggle('enter', false); void m.offsetWidth; if (changed) m.classList.toggle('enter', true);
   ui.lastHash = h;
   document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
-  $('#fab').hidden = !['', 'contacts', 'pipeline'].includes(route || '');
+  $('#fab').hidden = !['', 'contacts', 'companies', 'pipeline'].includes(route || '');
+  $('#fab').dataset.act = route === 'companies' ? 'new-company' : 'new-contact';
+  $('#fab').setAttribute?.('aria-label', route === 'companies' ? 'Nouvelle entreprise' : 'Nouveau contact');
   updateTop();
   if (route === 'meetings' && G.connected() && ui.meet.items === null && !ui.meet.loading) fetchMeetings();
   if (!route) {
@@ -465,6 +595,11 @@ document.addEventListener('click', async e => {
   if (act === 'del-note' || act === 'edit-task') e.preventDefault();
   if (act === 'new-contact') editContact();
   else if (act === 'edit-contact') editContact(byId('contacts', cid));
+  else if (act === 'new-company') editCompany();
+  else if (act === 'edit-company') editCompany(byId('companies', cid));
+  else if (act === 'add-company-contact') editContact(null, { company: byId('companies', cid)?.name || '' });
+  else if (act === 'open-company') location.hash = '#/company/' + id;
+  else if (act === 'cotab') { ui.cot = el.dataset.t; render(); }
   else if (act === 'add-task') addTask(cid);
   else if (act === 'edit-task') addTask(cid, byId('tasks', id));
   else if (act === 'add-note') addNote(cid);
@@ -530,6 +665,7 @@ document.addEventListener('change', async e => {
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'q') { ui.q = e.target.value; $('#clist').innerHTML = contactList(); }
+  if (e.target.id === 'cq') { ui.cq = e.target.value; $('#colist').innerHTML = companyList(); }
 });
 
 function download(name, blob) {
@@ -551,9 +687,9 @@ async function importData(file) {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    if (!db.STORES.every(k => Array.isArray(data[k]))) throw new Error('format');
+    if (!['contacts', 'tasks', 'notes', 'docs'].every(k => Array.isArray(data[k]))) throw new Error('format');
     if (!confirm('Remplacer toutes les données de cet appareil par cette sauvegarde ?')) return;
-    for (const k of db.STORES) { await db.clear(k); for (const v of data[k]) await db.put(k, v); }
+    for (const k of db.STORES) { await db.clear(k); for (const v of data[k] || []) await db.put(k, v); }
     await load(); render();
     alert('Import terminé.');
   } catch { alert('Fichier de sauvegarde invalide.'); }
