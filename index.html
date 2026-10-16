@@ -11,13 +11,16 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="top"><h1 id="title">Aujourd'hui</h1><span id="topAction"></span></header>
+<header class="top"><h1 id="title">Accueil</h1><span id="topAction"></span></header>
 <main id="main"></main>
 <button class="fab" id="fab" data-act="new-contact" aria-label="Nouveau contact">+</button>
 <nav class="tabs">
-  <a href="#/" data-tab="today">Aujourd'hui</a>
-  <a href="#/contacts" data-tab="contacts">Contacts</a>
-  <a href="#/settings" data-tab="settings">Réglages</a>
+  <div class="brand">Mon CRM</div>
+  <a href="#/" data-tab="today"><i>🏠</i><span>Accueil</span></a>
+  <a href="#/contacts" data-tab="contacts"><i>👥</i><span>Contacts</span></a>
+  <a href="#/pipeline" data-tab="pipeline"><i>📊</i><span>Pipeline</span></a>
+  <a href="#/tasks" data-tab="tasks"><i>✅</i><span>Tâches</span></a>
+  <a href="#/settings" data-tab="settings"><i>⚙️</i><span>Réglages</span></a>
 </nav>
 <script type="module" src="app.js"></script>
 </body>

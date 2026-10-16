@@ -29,7 +29,7 @@ function dueLabel(s) {
 
 // ---------- état ----------
 const S = { contacts: [], tasks: [], notes: [], docs: [], tombs: [] };
-const ui = { q: '', status: '' };
+const ui = { q: '', status: '', tf: 'open', ct: 'activity', ctId: '' };
 const byId = (k, id) => S[k].find(x => x.id === id);
 
 async function load() { for (const k of Object.keys(S)) S[k] = await db.all(k); }
@@ -228,53 +228,113 @@ function viewToday() {
     ${G.configured() ? '<p style="margin-top:16px"><a class="btn" href="#/meetings">📝 Comptes rendus de réunions</a></p>' : ''}`;
 }
 
+const initials = n => (n || '?').split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
+const nextTask = id => S.tasks.filter(t => t.contactId === id && !t.done).sort((a, b) => a.due.localeCompare(b.due))[0];
+const CH_ICON = { 'WhatsApp': '💬', 'Google Meet': '🎥', 'Appel': '📞', 'Email': '✉️', 'En personne': '🤝' };
+const docIcon = d => d.kind === 'video' ? '🎥' : d.kind === 'notes' ? '📝' : '📄';
+
 function contactList() {
   const q = ui.q.trim().toLowerCase();
   const list = S.contacts
     .filter(c => (!ui.status || c.status === ui.status) && (!q || [c.name, c.company, c.phone, c.email].some(v => (v || '').toLowerCase().includes(q))))
     .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   if (!list.length) return `<div class="empty">${S.contacts.length ? 'Aucun résultat.' : 'Aucun contact pour l\'instant.<br>Appuyez sur + pour en ajouter un.'}</div>`;
-  return `<ul class="list">${list.map(c => {
-    const next = S.tasks.filter(t => t.contactId === c.id && !t.done).sort((a, b) => a.due.localeCompare(b.due))[0];
-    return `<li><a class="grow" href="#/contact/${c.id}"><b>${esc(c.name)}</b><small>${esc(c.company || '')}${next ? ' · ' + dueLabel(next.due) : ''}</small></a>
-      <span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></li>`;
-  }).join('')}</ul>`;
+  return `<table class="tbl"><thead><tr><th>Nom</th><th class="hm">Entreprise</th><th>Statut</th><th class="hm">Montant</th><th class="hm">Dernier contact</th><th class="hm">Prochaine relance</th></tr></thead><tbody>${list.map(c => {
+    const n = nextTask(c.id);
+    return `<tr data-act="open" data-id="${c.id}"><td><div class="row nowrap"><span class="av s">${esc(initials(c.name))}</span><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.company || c.email || '')}</small></div></div></td>
+      <td class="hm">${esc(c.company || '')}</td><td><span class="badge ${badgeClass(c.status)}">${esc(c.status)}</span></td>
+      <td class="hm">${c.amount ? euro(c.amount) : ''}</td><td class="hm">${c.lastContact ? fmt(c.lastContact) : ''}</td><td class="hm">${n ? dueLabel(n.due) : ''}</td></tr>`;
+  }).join('')}</tbody></table>`;
 }
 function viewContacts() {
-  return `<input id="q" type="search" placeholder="Rechercher un nom, une entreprise…" value="${esc(ui.q)}">
-    <div class="chips"><button class="chip ${ui.status ? '' : 'on'}" data-act="filter" data-s="">Tous</button>
-    ${STATUTS.map(s => `<button class="chip ${ui.status === s ? 'on' : ''}" data-act="filter" data-s="${esc(s)}">${esc(s)}</button>`).join('')}</div>
+  return `<div class="row between" style="margin:0 0 10px"><input id="q" type="search" placeholder="Rechercher un nom, une entreprise…" value="${esc(ui.q)}" style="max-width:420px"><button class="btn p" data-act="new-contact">+ Nouveau contact</button></div>
+    <div class="chips"><button class="chip ${ui.status ? '' : 'on'}" data-act="filter" data-s="">Tous (${S.contacts.length})</button>
+    ${STATUTS.map(s => `<button class="chip ${ui.status === s ? 'on' : ''}" data-act="filter" data-s="${esc(s)}">${esc(s)} (${S.contacts.filter(c => c.status === s).length})</button>`).join('')}</div>
     <div id="clist">${contactList()}</div>`;
+}
+
+function viewPipeline() {
+  const cols = STATUTS.map(s => {
+    const cs = S.contacts.filter(c => c.status === s).sort((a, b) => (b.amount || 0) - (a.amount || 0));
+    const total = cs.reduce((t, c) => t + (c.amount || 0), 0);
+    return `<section class="col"><header><b>${esc(s)}</b><small>${cs.length} contact${cs.length > 1 ? 's' : ''} · ${euro(total)}</small></header>
+      <div class="drop" data-status="${esc(s)}">${cs.map(c => {
+        const n = nextTask(c.id);
+        return `<a class="kcard ${badgeClass(s).replace('b-', 'k-')}" draggable="true" data-id="${c.id}" href="#/contact/${c.id}"><b>${esc(c.name)}</b><small>${esc(c.company || '')}</small>
+          <div class="row between nowrap" style="margin-top:6px"><span>${c.amount ? euro(c.amount) : ''}</span><small>${n ? dueLabel(n.due) : ''}</small></div></a>`;
+      }).join('') || '<p class="muted nothing">Aucun contact</p>'}</div></section>`;
+  }).join('');
+  return `<div class="board">${cols}</div><p class="muted hint">Sur ordinateur, glissez une carte vers une autre colonne pour changer son statut. Sur téléphone, ouvrez la fiche.</p>`;
+}
+
+function viewTasks() {
+  const open = S.tasks.filter(t => !t.done).sort((a, b) => a.due.localeCompare(b.due));
+  const g = {
+    open, late: open.filter(t => diff(t.due) < 0), today: open.filter(t => diff(t.due) === 0), week: open.filter(t => diff(t.due) >= 0 && diff(t.due) <= 7),
+    done: S.tasks.filter(t => t.done).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')),
+  };
+  const labels = { open: 'Toutes', late: 'En retard', today: 'Aujourd\'hui', week: '7 jours', done: 'Terminées' };
+  const list = g[ui.tf] || g.open;
+  return `<div class="chips">${Object.keys(labels).map(k => `<button class="chip ${ui.tf === k ? 'on' : ''}" data-act="tfilter" data-f="${k}">${labels[k]} (${g[k].length})</button>`).join('')}</div>
+    ${list.length ? `<ul class="list">${list.map(t => taskItem(t)).join('')}</ul>` : '<div class="empty">Aucune tâche ici.<br><small>Ajoutez une relance depuis la fiche d\'un contact.</small></div>'}`;
 }
 
 function viewContact(id) {
   const c = byId('contacts', id);
   if (!c) return '<div class="empty">Contact introuvable. <a href="#/contacts">Retour</a></div>';
   const tasks = S.tasks.filter(t => t.contactId === id).sort((a, b) => (a.done - b.done) || a.due.localeCompare(b.due));
-  const notes = S.notes.filter(n => n.contactId === id).sort((a, b) => b.date.localeCompare(a.date));
+  const notes = S.notes.filter(n => n.contactId === id);
   const docs = S.docs.filter(d => d.contactId === id).sort((a, b) => b.date.localeCompare(a.date));
   const wa = waLink(c.phone);
+  const openTasks = tasks.filter(t => !t.done);
+
+  const items = [
+    ...notes.map(n => ({ date: n.date, ico: CH_ICON[n.channel] || '💬', title: n.channel,
+      body: n.text.length > 400 ? `<details><summary>${esc(n.text.slice(0, 200))}…</summary><div class="note-body">${esc(n.text)}</div></details>` : `<div class="note-body">${esc(n.text)}</div>`,
+      del: `<a href="#" data-act="del-note" data-id="${n.id}" class="muted">supprimer</a>` })),
+    ...docs.map(d => ({ date: d.date, ico: docIcon(d), title: 'Document ajouté', body: `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.title)}</a>` })),
+    ...tasks.filter(t => t.done).map(t => ({ date: t.doneAt || t.due, ico: '✅', title: 'Relance terminée', body: esc(t.text) })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+
+  const tab = ui.ct;
+  const content = tab === 'tasks'
+    ? `<div class="row between"><b>Relances</b><button class="btn s p" data-act="add-task">+ Relance</button></div>${tasks.length ? `<ul class="list" style="margin-top:10px">${tasks.map(t => taskItem(t, false)).join('')}</ul>` : '<div class="empty">Aucune relance.</div>'}`
+    : tab === 'docs'
+    ? `<div class="row between"><b>Documents</b><button class="btn s p" data-act="add-doc">+ Document</button></div>${docs.length ? `<ul class="list" style="margin-top:10px">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${docIcon(d)} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Collez le lien Drive d\'un devis ou d\'un contrat.</div>'}`
+    : `<div class="row between"><b>Activité</b><button class="btn s p" data-act="add-note">+ Note / échange</button></div>
+       ${items.length ? `<div class="tl">${items.map(i => `<div class="item"><span class="ico">${i.ico}</span><div class="grow card"><div class="row between nowrap"><b>${esc(i.title)}</b><small>${fmt(i.date)} ${i.del || ''}</small></div>${i.body}</div></div>`).join('')}</div>` : '<div class="empty">Aucune activité. Notez votre premier échange.</div>'}`;
+
+  const prop = (k, v) => v ? `<div class="prop"><small>${k}</small><div>${v}</div></div>` : '';
   return `<p><a href="#/contacts" class="muted">← Contacts</a></p>
-    <div class="card">
-      <div class="row" style="justify-content:space-between;align-items:start"><div><h2 style="margin:0;font-size:20px;text-transform:none;letter-spacing:0;color:var(--text)">${esc(c.name)}</h2>
-        <span class="muted">${esc(c.company || '')}</span></div><button class="btn s" data-act="edit-contact">Modifier</button></div>
-      <div class="row" style="margin:12px 0"><select data-act="status" style="width:auto">${STATUTS.map(s => `<option ${s === c.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
-        ${c.amount ? `<span class="badge">${euro(c.amount)}</span>` : ''}</div>
-      <div class="row">
-        ${wa ? `<a class="btn wa" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
-        ${c.phone ? `<a class="btn" href="tel:${esc(c.phone)}">Appeler</a>` : ''}
-        ${c.email ? `<a class="btn" href="mailto:${esc(c.email)}">Email</a>` : ''}
-        ${c.driveUrl ? `<a class="btn" href="${esc(c.driveUrl)}" target="_blank" rel="noopener">Dossier Drive</a>` : ''}
-        ${G.configured() ? `<a class="btn" href="#/meetings/${c.id}">Réunions Meet</a>` : ''}</div>
-      ${c.source || c.lastContact ? `<p class="muted" style="margin:12px 0 0">${c.source ? 'Source : ' + esc(c.source) + '. ' : ''}${c.lastContact ? 'Dernier contact : ' + fmt(c.lastContact) + '.' : ''}</p>` : ''}
-      ${c.notes ? `<p class="note-body" style="margin:10px 0 0">${esc(c.notes)}</p>` : ''}
-    </div>
-    <h2>Relances <button class="btn s" data-act="add-task">+ Ajouter</button></h2>
-    ${tasks.length ? `<ul class="list">${tasks.map(t => taskItem(t, false)).join('')}</ul>` : '<div class="empty">Aucune relance.</div>'}
-    <h2>Échanges <button class="btn s" data-act="add-note">+ Ajouter</button></h2>
-    ${notes.length ? notes.map(n => `<div class="card"><small>${fmt(n.date)} · ${esc(n.channel)} <a href="#" data-act="del-note" data-id="${n.id}" class="muted" style="float:right">supprimer</a></small><div class="note-body">${esc(n.text)}</div></div>`).join('') : '<div class="empty">Aucun échange noté.</div>'}
-    <h2>Documents <button class="btn s" data-act="add-doc">+ Ajouter</button></h2>
-    ${docs.length ? `<ul class="list">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${d.kind === 'video' ? '🎥' : d.kind === 'notes' ? '📝' : '📄'} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Collez le lien Drive d\'un devis ou d\'un contrat.</div>'}`;
+    <div class="record">
+      <aside class="card">
+        <div class="row nowrap" style="align-items:center"><span class="av">${esc(initials(c.name))}</span><div class="grow"><b style="font-size:18px">${esc(c.name)}</b><br><span class="muted">${esc(c.company || '')}</span></div></div>
+        <div class="qa">
+          <button class="qbtn" data-act="add-note"><i>📝</i>Note</button>
+          <button class="qbtn" data-act="add-task"><i>✅</i>Relance</button>
+          <button class="qbtn" data-act="add-doc"><i>📄</i>Document</button>
+          ${c.phone ? `<a class="qbtn" href="tel:${esc(c.phone)}"><i>📞</i>Appeler</a>` : ''}
+          ${wa ? `<a class="qbtn" href="${wa}" target="_blank" rel="noopener"><i>💬</i>WhatsApp</a>` : ''}
+          ${c.email ? `<a class="qbtn" href="mailto:${esc(c.email)}"><i>✉️</i>Email</a>` : ''}
+        </div>
+        <hr>
+        <div class="row between"><b>À propos</b><button class="btn s" data-act="edit-contact">Modifier</button></div>
+        <div class="prop"><small>Statut</small><select data-act="status">${STATUTS.map(s => `<option ${s === c.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
+        ${prop('Montant potentiel', c.amount ? euro(c.amount) : '')}${prop('Téléphone', esc(c.phone))}${prop('Email', esc(c.email))}${prop('Source', esc(c.source))}
+        ${prop('Dernier contact', c.lastContact ? fmt(c.lastContact) : '')}
+        ${prop('Dossier Drive', c.driveUrl ? `<a href="${esc(c.driveUrl)}" target="_blank" rel="noopener">Ouvrir le dossier</a>` : '')}
+        ${G.configured() ? `<div class="prop"><a class="btn s" href="#/meetings/${c.id}">Réunions Meet</a></div>` : ''}
+        ${c.notes ? `<hr><small class="muted">Notes</small><p class="note-body" style="margin:4px 0 0">${esc(c.notes)}</p>` : ''}
+      </aside>
+      <section>
+        <div class="ctabs">
+          <button class="${tab === 'activity' ? 'on' : ''}" data-act="ctab" data-t="activity">Activité</button>
+          <button class="${tab === 'tasks' ? 'on' : ''}" data-act="ctab" data-t="tasks">Relances (${openTasks.length})</button>
+          <button class="${tab === 'docs' ? 'on' : ''}" data-act="ctab" data-t="docs">Documents (${docs.length})</button>
+        </div>
+        <div class="card" style="border-top-left-radius:0">${content}</div>
+      </section>
+    </div>`;
 }
 
 function viewSettings() {
@@ -290,16 +350,19 @@ function viewSettings() {
 function render() {
   const h = location.hash || '#/';
   const [, route, arg] = h.split('/');
-  let tab = 'today', title = 'Aujourd\'hui', html;
+  let tab = 'today', title = 'Accueil', html;
   if (route === 'contacts') { tab = 'contacts'; title = 'Contacts'; html = viewContacts(); }
-  else if (route === 'contact') { tab = 'contacts'; title = 'Fiche contact'; html = viewContact(arg); }
+  else if (route === 'contact') { tab = 'contacts'; title = 'Fiche contact'; if (ui.ctId !== arg) { ui.ctId = arg; ui.ct = 'activity'; } html = viewContact(arg); }
+  else if (route === 'pipeline') { tab = 'pipeline'; title = 'Pipeline'; html = viewPipeline(); }
+  else if (route === 'tasks') { tab = 'tasks'; title = 'Tâches'; html = viewTasks(); }
   else if (route === 'meetings') { tab = 'today'; title = 'Réunions Meet'; html = viewMeetings(arg); }
   else if (route === 'settings') { tab = 'settings'; title = 'Réglages'; html = viewSettings(); }
   else html = viewToday();
   $('#title').textContent = title;
   $('#main').innerHTML = html;
+  document.body.dataset.route = route || 'home';
   document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
-  $('#fab').hidden = route === 'settings' || route === 'contact' || route === 'meetings';
+  $('#fab').hidden = !['', 'contacts', 'pipeline'].includes(route || '');
   updateTop();
   if (route === 'meetings' && G.connected() && ui.meet.items === null && !ui.meet.loading) fetchMeetings();
   if (!route && G.connected() && ui.cal.items === null && !ui.cal.loading) fetchCal();
@@ -322,6 +385,9 @@ document.addEventListener('click', async e => {
   else if (act === 'del-note') { if (confirm('Supprimer cet échange ?')) { await remove('notes', id); render(); } }
   else if (act === 'del-doc') { if (confirm('Retirer ce document ?')) { await remove('docs', id); render(); } }
   else if (act === 'filter') { ui.status = el.dataset.s; render(); }
+  else if (act === 'open') location.hash = '#/contact/' + id;
+  else if (act === 'ctab') { ui.ct = el.dataset.t; render(); }
+  else if (act === 'tfilter') { ui.tf = el.dataset.f; render(); }
   else if (act === 'sync') await doSync(true);
   else if (act === 'google-connect') { await connectGoogle(); }
   else if (act === 'google-signout') { G.signOut(); ui.sync = { state: 'off' }; ui.meet.items = null; ui.cal.items = null; render(); }
@@ -336,6 +402,24 @@ document.addEventListener('click', async e => {
       await load(); render();
     }
   }
+});
+// glisser-déposer des cartes du pipeline (ordinateur)
+document.addEventListener('dragstart', e => {
+  const k = e.target.closest?.('.kcard');
+  if (k) { e.dataTransfer.setData('text/plain', k.dataset.id); e.dataTransfer.effectAllowed = 'move'; }
+});
+document.addEventListener('dragover', e => {
+  const d = e.target.closest?.('.drop');
+  if (d) { e.preventDefault(); d.classList.add('over'); }
+});
+document.addEventListener('dragleave', e => e.target.closest?.('.drop')?.classList.remove('over'));
+document.addEventListener('drop', async e => {
+  const d = e.target.closest?.('.drop');
+  if (!d) return;
+  e.preventDefault();
+  const c = byId('contacts', e.dataTransfer.getData('text/plain'));
+  if (c && c.status !== d.dataset.status) await save('contacts', { ...c, status: d.dataset.status });
+  render();
 });
 document.addEventListener('change', async e => {
   if (e.target.dataset.act === 'status') {
