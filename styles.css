@@ -355,3 +355,9 @@ body{font-size:16px;font-weight:400;letter-spacing:0}
   h2{margin:16px 0 6px}
   .card{margin-bottom:8px}
 }
+
+/* ===== Barre latérale : les entrées gardent leur taille (plus d'étirement sur toute la hauteur) ===== */
+@media (min-width:900px){
+  .tabs{justify-content:flex-start;align-content:flex-start}
+  .tabs a{flex:none;height:30px;margin-bottom:2px}
+}
