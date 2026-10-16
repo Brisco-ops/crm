@@ -101,13 +101,36 @@ export async function docText(fileId) {
   return (await gfetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/plain`)).text();
 }
 
-// ---- planning : événements de l'agenda principal sur une période ----
+// ---- planning : événements de tous les agendas affichés dans Google Agenda ----
+// (agenda principal + agendas ajoutés ou partagés et cochés dans « Mes agendas »)
+async function visibleCalendars() {
+  try {
+    const j = await (await gfetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader&fields=items(id,summary,selected,primary,backgroundColor)')).json();
+    const cals = (j.items || []).filter(c => c.selected || c.primary).sort((a, b) => !!b.primary - !!a.primary).slice(0, 12);
+    if (cals.length) return cals;
+  } catch { /* repli sur l'agenda principal */ }
+  return [{ id: 'primary', summary: '', primary: true }];
+}
 export async function eventsBetween(fromISO, toISO) {
-  const u = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
-  u.search = new URLSearchParams({
-    timeMin: fromISO, timeMax: toISO,
-    singleEvents: 'true', orderBy: 'startTime', maxResults: '250',
-    fields: 'items(id,summary,status,start,end,hangoutLink,htmlLink,location,attendees(email,self,responseStatus))',
-  });
-  return (await (await gfetch(u)).json()).items || [];
+  const cals = await visibleCalendars();
+  const lists = await Promise.all(cals.map(async c => {
+    try {
+      const u = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(c.id)}/events`);
+      u.search = new URLSearchParams({
+        timeMin: fromISO, timeMax: toISO, singleEvents: 'true', orderBy: 'startTime', maxResults: '250',
+        fields: 'items(id,iCalUID,summary,status,start,end,hangoutLink,htmlLink,location,attendees(email,self,responseStatus))',
+      });
+      const items = (await (await gfetch(u)).json()).items || [];
+      return items.map(e => ({ ...e, _cal: { name: c.primary ? '' : c.summary, color: c.backgroundColor } }));
+    } catch (err) {
+      if (c.primary) throw err; // l'agenda principal doit fonctionner ; un agenda partagé en échec est ignoré
+      return [];
+    }
+  }));
+  const seen = new Set(), out = [];
+  for (const e of lists.flat()) {
+    const k = (e.iCalUID || e.id) + '|' + (e.start?.dateTime || e.start?.date);
+    if (!seen.has(k)) { seen.add(k); out.push(e); }
+  }
+  return out;
 }

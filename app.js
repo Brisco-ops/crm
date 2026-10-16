@@ -239,13 +239,13 @@ function viewToday() {
   }).join('');
   const allday = per.map(p => {
     const tasks = open.filter(t => t.due === p.d || (p.d === td && t.due < td));
-    return `<div class="adc">${p.allDay.map(e => `<a class="achip ev" href="${esc(e.link)}" target="_blank" rel="noopener" title="${esc(e.title)}">${esc(e.title)}</a>`).join('')}
+    return `<div class="adc">${p.allDay.map(e => `<a class="achip ev" href="${esc(e.link)}" target="_blank" rel="noopener" title="${esc(e.title)}${e.cal ? ' — ' + esc(e.cal) : ''}"${e.color ? ` style="background:${e.color}33;border-left-color:${e.color}"` : ''}>${esc(e.title)}</a>`).join('')}
       ${tasks.map(t => `<span class="achip tk ${t.due < td ? 'lt' : ''}"><button class="tcheck" data-act="toggle" data-id="${t.id}" aria-label="Terminer"></button><a href="#/contact/${t.contactId}" title="${esc(t.text)}">${esc(t.text)} <small>${contactName(t.contactId)}${t.due < td ? ' · retard' : ''}</small></a></span>`).join('')}</div>`;
   }).join('');
   const hours = Array.from({ length: h1 - h0 }, (_, i) => `<span style="top:${i * HOUR_PX}px">${pad(h0 + i)}:00</span>`).join('');
   const cols = per.map(p => `<div class="dcol">${p.timed.map(t => {
     const e = t.e, c = e.emails.map(m => byEmail.get(norm(m))).find(Boolean);
-    return `<div class="blk" data-act="openurl" data-url="${esc(e.link)}" style="top:${(t.s - base) * MIN_PX}px;height:${Math.max(22, (t.f - t.s) * MIN_PX - 2)}px;left:${t.col / t.cols * 100}%;width:calc(${100 / t.cols}% - 3px)" title="${esc(e.title)}">
+    return `<div class="blk" data-act="openurl" data-url="${esc(e.link)}" style="top:${(t.s - base) * MIN_PX}px;height:${Math.max(22, (t.f - t.s) * MIN_PX - 2)}px;left:${t.col / t.cols * 100}%;width:calc(${100 / t.cols}% - 3px)${e.color ? `;background:${e.color}38;border-left-color:${e.color}` : ''}" title="${esc(e.title)}${e.cal ? ' — ' + esc(e.cal) : ''}">
       <b>${esc(e.title)}</b><small>${hhmm(e.start)} – ${hhmm(e.end)}${c ? ' · ' + esc(c.name) : ''}</small>${e.meet ? `<a class="join" href="${esc(e.meet)}" target="_blank" rel="noopener" title="Rejoindre la réunion">🎥</a>` : ''}</div>`;
   }).join('')}${p.d === td && nowMin >= base && nowMin <= h1 * 60 ? `<div class="nowl" style="top:${(nowMin - base) * MIN_PX}px"></div>` : ''}</div>`).join('');
 
@@ -597,6 +597,7 @@ async function fetchCal() {
         start: e.start.dateTime || '', end: e.end?.dateTime || '',
         meet: e.hangoutLink || '', link: e.htmlLink, location: e.location || '',
         emails: (e.attendees || []).filter(a => !a.self).map(a => a.email),
+        color: /^#[0-9a-f]{6}$/i.test(e._cal?.color || '') ? e._cal.color : '', cal: e._cal?.name || '',
       }));
     ui.cal.error = '';
   } catch (err) {
