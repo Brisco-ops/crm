@@ -81,17 +81,33 @@ function field(f, v) {
   if (f.type === 'textarea') return `<label>${f.label}<textarea name="${f.name}" rows="${f.rows || 3}" ${req}>${esc(val)}</textarea></label>`;
   return `<label>${f.label}<input name="${f.name}" type="${f.type || 'text'}" value="${esc(val)}" ${req} ${f.type === 'tel' ? 'inputmode="tel"' : ''}></label>`;
 }
+function confirmSheet(msg, label = 'Supprimer') {
+  return new Promise(res => {
+    const d = document.createElement('dialog');
+    d.className = 'asheet';
+    d.innerHTML = `<div class="ag"><p>${esc(msg)}</p><button class="red" data-ok>${esc(label)}</button></div><div class="ag"><button data-no>Annuler</button></div>`;
+    document.body.appendChild(d);
+    const done = v => { d.close(); d.remove(); res(v); };
+    d.querySelector('[data-ok]').onclick = () => done(true);
+    d.querySelector('[data-no]').onclick = () => done(false);
+    d.addEventListener('cancel', e => { e.preventDefault(); done(false); });
+    d.addEventListener('click', e => { if (e.target === d) done(false); });
+    d.showModal();
+  });
+}
 function openForm({ title, fields, values = {}, onSave, onDelete }) {
   const d = document.createElement('dialog');
-  d.innerHTML = `<form><h3>${esc(title)}</h3>${fields.map(f => field(f, values[f.name])).join('')}
-    <div class="actions">${onDelete ? '<button type="button" class="btn d" data-del>Supprimer</button>' : ''}<span class="grow"></span>
-    <button type="button" class="btn" data-cancel>Annuler</button><button class="btn p">Enregistrer</button></div></form>`;
+  d.innerHTML = `<form><div class="grab"></div>
+    <div class="sh"><button type="button" class="lnk" data-cancel>Annuler</button><h3>${esc(title)}</h3><button class="lnk b">Enregistrer</button></div>
+    <div class="sb">${fields.map(f => field(f, values[f.name])).join('')}
+    ${onDelete ? '<button type="button" class="btn d wide" data-del>Supprimer</button>' : ''}</div></form>`;
   document.body.appendChild(d);
   const close = () => { d.close(); d.remove(); };
   d.querySelector('[data-cancel]').onclick = close;
   d.addEventListener('cancel', () => setTimeout(() => d.remove()));
+  d.addEventListener('click', e => { if (e.target === d) close(); });
   if (onDelete) d.querySelector('[data-del]').onclick = async () => {
-    if (confirm('Supprimer définitivement ?')) { close(); await onDelete(); render(); }
+    if (await confirmSheet('Supprimer définitivement ?')) { close(); await onDelete(); render(); }
   };
   d.querySelector('form').onsubmit = async e => {
     e.preventDefault();
@@ -250,7 +266,7 @@ function viewToday() {
   }).join('')}${p.d === td && nowMin >= base && nowMin <= h1 * 60 ? `<div class="nowl" style="top:${(nowMin - base) * MIN_PX}px"></div>` : ''}</div>`).join('');
 
   let note = '';
-  if (G.configured() && !G.connected()) note = '<div class="card note">Connectez Google pour afficher vos réunions dans le calendrier. <button class="btn p s" data-act="google-connect">Se connecter avec Google</button></div>';
+  if (G.configured() && !G.connected()) note = '<div class="card note">Connecte Google pour afficher tes réunions dans le calendrier. <button class="btn p s" data-act="google-connect">Se connecter avec Google</button></div>';
   else if (ui.cal.error) note = `<p class="late">Agenda : ${esc(ui.cal.error)}</p>`;
 
   return `<div class="stats slim">
@@ -284,7 +300,7 @@ function contactList() {
   const list = S.contacts
     .filter(c => (!ui.status || c.status === ui.status) && (!q || [c.name, c.company, c.phone, c.email].some(v => (v || '').toLowerCase().includes(q))))
     .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
-  if (!list.length) return `<div class="empty">${S.contacts.length ? 'Aucun résultat.' : 'Aucun contact pour l\'instant.<br>Appuyez sur + pour en ajouter un.'}</div>`;
+  if (!list.length) return `<div class="empty">${S.contacts.length ? 'Aucun résultat.' : 'Aucun contact pour l\'instant.<br>Appuie sur + pour en ajouter un.'}</div>`;
   return `<table class="tbl"><thead><tr><th>Nom</th><th class="hm">Entreprise</th><th>Statut</th><th class="hm">Montant</th><th class="hm">Dernier contact</th><th class="hm">Prochaine relance</th></tr></thead><tbody>${list.map(c => {
     const n = nextTask(c.id);
     return `<tr data-act="open" data-id="${c.id}"><td><div class="row nowrap"><span class="av s">${esc(initials(c.name))}</span><div class="grow"><b>${esc(c.name)}</b><small>${esc(c.company || c.email || '')}</small></div></div></td>
@@ -310,7 +326,7 @@ function viewPipeline() {
           <div class="row between nowrap" style="margin-top:6px"><span>${c.amount ? euro(c.amount) : ''}</span><small>${n ? dueLabel(n.due) : ''}</small></div></a>`;
       }).join('') || '<p class="muted nothing">Aucun contact</p>'}</div></section>`;
   }).join('');
-  return `<div class="board">${cols}</div><p class="muted hint">Sur ordinateur, glissez une carte vers une autre colonne pour changer son statut. Sur téléphone, ouvrez la fiche.</p>`;
+  return `<div class="board">${cols}</div><p class="muted hint">Sur ordinateur, glisse une carte vers une autre colonne pour changer son statut. Sur téléphone, ouvre la fiche.</p>`;
 }
 
 function viewTasks() {
@@ -322,7 +338,7 @@ function viewTasks() {
   const labels = { open: 'Toutes', late: 'En retard', today: 'Aujourd\'hui', week: '7 jours', done: 'Terminées' };
   const list = g[ui.tf] || g.open;
   return `<div class="chips">${Object.keys(labels).map(k => `<button class="chip ${ui.tf === k ? 'on' : ''}" data-act="tfilter" data-f="${k}">${labels[k]} (${g[k].length})</button>`).join('')}</div>
-    ${list.length ? `<ul class="list">${list.map(t => taskItem(t)).join('')}</ul>` : '<div class="empty">Aucune tâche ici.<br><small>Ajoutez une relance depuis la fiche d\'un contact.</small></div>'}`;
+    ${list.length ? `<ul class="list">${list.map(t => taskItem(t)).join('')}</ul>` : '<div class="empty">Aucune tâche ici.<br><small>Ajoute une relance depuis la fiche d\'un contact.</small></div>'}`;
 }
 
 function viewContact(id) {
@@ -346,9 +362,9 @@ function viewContact(id) {
   const content = tab === 'tasks'
     ? `<div class="row between"><b>Relances</b><button class="btn s p" data-act="add-task">+ Relance</button></div>${tasks.length ? `<ul class="list" style="margin-top:10px">${tasks.map(t => taskItem(t, false)).join('')}</ul>` : '<div class="empty">Aucune relance.</div>'}`
     : tab === 'docs'
-    ? `<div class="row between"><b>Documents</b><button class="btn s p" data-act="add-doc">+ Document</button></div>${docs.length ? `<ul class="list" style="margin-top:10px">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${docIcon(d)} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Collez le lien Drive d\'un devis ou d\'un contrat.</div>'}`
+    ? `<div class="row between"><b>Documents</b><button class="btn s p" data-act="add-doc">+ Document</button></div>${docs.length ? `<ul class="list" style="margin-top:10px">${docs.map(d => `<li><a class="grow" href="${esc(d.url)}" target="_blank" rel="noopener"><b>${docIcon(d)} ${esc(d.title)}</b><small>${fmt(d.date)}</small></a><button class="btn s d" data-act="del-doc" data-id="${d.id}">✕</button></li>`).join('')}</ul>` : '<div class="empty">Aucun document. Colle le lien Drive d\'un devis ou d\'un contrat.</div>'}`
     : `<div class="row between"><b>Activité</b><button class="btn s p" data-act="add-note">+ Note / échange</button></div>
-       ${items.length ? `<div class="tl">${items.map(i => `<div class="item"><span class="ico">${i.ico}</span><div class="grow card"><div class="row between nowrap"><b>${esc(i.title)}</b><small>${fmt(i.date)} ${i.del || ''}</small></div>${i.body}</div></div>`).join('')}</div>` : '<div class="empty">Aucune activité. Notez votre premier échange.</div>'}`;
+       ${items.length ? `<div class="tl">${items.map(i => `<div class="item"><span class="ico">${i.ico}</span><div class="grow card"><div class="row between nowrap"><b>${esc(i.title)}</b><small>${fmt(i.date)} ${i.del || ''}</small></div>${i.body}</div></div>`).join('')}</div>` : '<div class="empty">Aucune activité. Note ton premier échange.</div>'}`;
 
   const prop = (k, v) => v ? `<div class="prop"><small>${k}</small><div>${v}</div></div>` : '';
   return `<p><a href="#/contacts" class="muted">← Contacts</a></p>
@@ -378,7 +394,7 @@ function viewContact(id) {
           <button class="${tab === 'tasks' ? 'on' : ''}" data-act="ctab" data-t="tasks">Relances (${openTasks.length})</button>
           <button class="${tab === 'docs' ? 'on' : ''}" data-act="ctab" data-t="docs">Documents (${docs.length})</button>
         </div>
-        <div class="card" style="border-top-left-radius:0">${content}</div>
+        <div class="card" style="margin-top:10px">${content}</div>
       </section>
     </div>`;
 }
@@ -386,7 +402,7 @@ function viewContact(id) {
 function viewSettings() {
   return `${googleCard()}<div class="card"><b>Indicatif pays par défaut</b><p class="muted">Utilisé pour transformer 06 12 34 56 78 en numéro WhatsApp international.</p>
       <input id="cc" value="${esc(cc())}" inputmode="numeric" style="max-width:120px"> <small class="muted">33 = France</small></div>
-    <div class="card"><b>Sauvegarde</b><p class="muted">Les données sont stockées sur cet appareil. Exportez régulièrement un fichier de sauvegarde, et importez-le pour retrouver vos données sur un autre appareil.</p>
+    <div class="card"><b>Sauvegarde</b><p class="muted">Les données sont stockées sur cet appareil. Exporte régulièrement un fichier de sauvegarde, et importe-le pour retrouver tes données sur un autre appareil.</p>
       <div class="row"><button class="btn p" data-act="export">Exporter</button><label class="btn" style="margin:0;color:var(--text)">Importer<input type="file" id="import" accept=".json" hidden></label></div></div>
     <div class="card"><b>Installer l'application</b><p class="muted">Android/Chrome : menu ⋮ → « Installer l'application ». iPhone/Safari : Partager → « Sur l'écran d'accueil ». Ordinateur : icône d'installation dans la barre d'adresse.</p></div>
     <div class="card"><b>Zone de danger</b><p class="muted">Efface toutes les données de cet appareil.</p><button class="btn d" data-act="wipe">Tout effacer</button></div>`;
@@ -407,6 +423,9 @@ function render() {
   $('#title').textContent = title;
   $('#main').innerHTML = html;
   document.body.dataset.route = route || 'home';
+  const m = $('#main'), changed = ui.lastHash !== h;
+  m.classList.toggle('enter', false); void m.offsetWidth; if (changed) m.classList.toggle('enter', true);
+  ui.lastHash = h;
   document.querySelectorAll('.tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   $('#fab').hidden = !['', 'contacts', 'pipeline'].includes(route || '');
   updateTop();
@@ -432,9 +451,9 @@ document.addEventListener('click', async e => {
   else if (act === 'edit-task') addTask(cid, byId('tasks', id));
   else if (act === 'add-note') addNote(cid);
   else if (act === 'add-doc') addDoc(cid);
-  else if (act === 'toggle') { const t = byId('tasks', id); await save('tasks', { ...t, done: !t.done, doneAt: t.done ? null : today() }); render(); }
-  else if (act === 'del-note') { if (confirm('Supprimer cet échange ?')) { await remove('notes', id); render(); } }
-  else if (act === 'del-doc') { if (confirm('Retirer ce document ?')) { await remove('docs', id); render(); } }
+  else if (act === 'toggle') { navigator.vibrate?.(8); const t = byId('tasks', id); await save('tasks', { ...t, done: !t.done, doneAt: t.done ? null : today() }); render(); }
+  else if (act === 'del-note') { if (await confirmSheet('Supprimer cet échange ?')) { await remove('notes', id); render(); } }
+  else if (act === 'del-doc') { if (await confirmSheet('Retirer ce document ?', 'Retirer')) { await remove('docs', id); render(); } }
   else if (act === 'filter') { ui.status = el.dataset.s; render(); }
   else if (act === 'open') location.hash = '#/contact/' + id;
   else if (act === 'ctab') { ui.ct = el.dataset.t; render(); }
@@ -456,7 +475,7 @@ document.addEventListener('click', async e => {
   else if (act === 'meet-note') await meetNote(el);
   else if (act === 'export') exportData();
   else if (act === 'wipe') {
-    if (confirm('Tout effacer sur cet appareil ?') && confirm('Vraiment ? Pensez à exporter avant.')) {
+    if (confirm('Tout effacer sur cet appareil ?') && confirm('Vraiment ? Pense à exporter avant.')) {
       for (const k of db.STORES) await db.clear(k);
       await load(); render();
     }
@@ -574,7 +593,7 @@ function googleCard() {
   const st = ui.sync;
   const status = !G.configured() ? 'Non configuré' : !G.connected() ? 'Non connecté' : { ok: 'Synchronisé à ' + new Date(st.at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }), syncing: 'Synchronisation…', error: 'Erreur : ' + st.msg }[st.state] || 'Connecté';
   return `<div class="card"><b>Google</b>
-    <p class="muted">Synchronise le CRM entre vos appareils (via votre Drive) et importe les comptes rendus et enregistrements Meet.</p>
+    <p class="muted">Synchronise le CRM entre tes appareils (via ton Drive) et importe les comptes rendus et enregistrements Meet.</p>
     <label>ID client Google (OAuth)<input id="gcid" value="${esc(localStorage.getItem('gcid') || '')}" placeholder="xxxx.apps.googleusercontent.com"></label>
     <p class="muted">${esc(status)}</p>
     ${G.configured() ? `<div class="row">${G.connected() ? '<button class="btn p" data-act="sync">Synchroniser</button><button class="btn" data-act="google-signout">Se déconnecter</button>' : '<button class="btn p" data-act="google-connect">Se connecter avec Google</button>'}</div>` : ''}</div>`;
@@ -643,7 +662,7 @@ async function fetchMeetings() {
 function viewMeetings(filterId) {
   const back = `<p><a href="${filterId ? '#/contact/' + filterId : '#/'}" class="muted">← Retour</a></p>`;
   if (!G.configured()) return back + '<div class="empty">Google n\'est pas configuré. Voir Réglages.</div>';
-  if (!G.connected()) return back + '<div class="empty">Connectez-vous à Google pour voir vos réunions.<br><br><button class="btn p" data-act="google-connect">Se connecter avec Google</button></div>';
+  if (!G.connected()) return back + '<div class="empty">Connecte-toi à Google pour voir tes réunions.<br><br><button class="btn p" data-act="google-connect">Se connecter avec Google</button></div>';
   if (ui.meet.items === null) return back + '<div class="empty">Chargement des réunions…</div>';
   const rows = ui.meet.items.filter(i => !filterId || i.contactId === filterId);
   const noEmail = S.contacts.filter(c => !c.email).length;

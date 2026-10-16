@@ -144,3 +144,130 @@ hr{border:0;border-top:1px solid var(--line);margin:14px 0}
 .join{position:absolute;top:2px;right:3px;font-size:13px;text-decoration:none}
 .nowl{position:absolute;left:0;right:0;height:0;border-top:2px solid var(--danger);z-index:3;pointer-events:none}
 .nowl::before{content:"";position:absolute;left:-5px;top:-6px;width:10px;height:10px;border-radius:50%;background:var(--danger)}
+
+/* =====================================================================
+   Direction artistique : iOS natif, verre dépoli, grands titres
+   (les couleurs de marque existantes sont conservées)
+   ===================================================================== */
+:root{--glass:rgba(255,255,255,.62);--glass-line:rgba(255,255,255,.85);--glass-shadow:0 8px 30px rgba(0,0,0,.08);
+  --sep:rgba(60,60,67,.2);--fill:#e3e3e8;--r:12px;--rg:20px;--area:var(--primary)}
+@media (prefers-color-scheme:dark){:root{--glass:rgba(30,30,32,.55);--glass-line:rgba(255,255,255,.1);--glass-shadow:0 8px 30px rgba(0,0,0,.45);--sep:rgba(84,84,88,.65);--fill:#2c2c2e}}
+*{-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;font-size:17px;line-height:1.35;letter-spacing:-.01em;font-variant-numeric:tabular-nums;background:var(--bg)}
+input,select,textarea,button{font-family:inherit}
+input,select,textarea{font-size:16px}
+.tabs,.btn,.chip,.qbtn,.seg button,.ctabs button,.top,.fab,.check,.tcheck,.dh{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+
+/* fond : halos de la couleur de marque */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:
+   radial-gradient(70% 45% at 0% 0%,color-mix(in srgb,var(--area) 22%,#fff) 0%,transparent 70%),
+   radial-gradient(55% 40% at 100% 6%,rgba(255,45,85,.10),transparent 70%),
+   radial-gradient(60% 40% at 100% 100%,rgba(255,214,10,.14),transparent 70%),
+   radial-gradient(50% 35% at 0% 100%,color-mix(in srgb,var(--area) 12%,transparent),transparent 70%)}
+@media (prefers-color-scheme:dark){body::before{background:
+   radial-gradient(70% 45% at 0% 0%,color-mix(in srgb,var(--area) 38%,transparent) 0%,transparent 70%),
+   radial-gradient(55% 40% at 100% 6%,rgba(255,45,85,.16),transparent 70%),
+   radial-gradient(60% 40% at 100% 100%,rgba(255,214,10,.10),transparent 70%),
+   radial-gradient(50% 35% at 0% 100%,color-mix(in srgb,var(--area) 20%,transparent),transparent 70%)}}
+/* voile progressif sous l'heure (barre d'état translucide) */
+body::after{content:"";position:fixed;top:0;left:0;right:0;height:calc(env(safe-area-inset-top) + 10px);z-index:20;pointer-events:none;
+  background:linear-gradient(to bottom,color-mix(in srgb,var(--bg) 88%,transparent),transparent)}
+
+/* grand titre */
+.top{position:static;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;background:transparent;border:0;
+  max-width:720px;margin:0 auto;padding:calc(20px + env(safe-area-inset-top)) 16px 4px}
+.top .sur{display:block;font-size:15px;color:var(--muted);font-weight:500}
+.top h1{font-size:34px;font-weight:800;letter-spacing:-.02em;line-height:1.1;margin:0}
+main{padding-top:10px}
+h2{font-size:13px;letter-spacing:.06em}
+
+/* verre dépoli */
+.card,.stat,.tbl,.cal-scroll,.col,ul.list,.record aside{background:var(--glass);-webkit-backdrop-filter:blur(26px) saturate(180%);backdrop-filter:blur(26px) saturate(180%);
+  border:1px solid var(--glass-line);border-radius:var(--rg);box-shadow:var(--glass-shadow)}
+.tbl{border-collapse:separate;border-spacing:0;overflow:hidden}
+.tbl th{background:transparent}
+.tbl td{border-top:.5px solid var(--sep)}
+.tbl tr[data-act]:hover td{background:rgba(127,127,127,.08)}
+.kcard{background:var(--card);border-radius:14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.col{padding:12px}
+
+/* listes groupées (façon Réglages iOS) */
+ul.list{overflow:hidden}
+ul.list>li{background:transparent;border-color:var(--sep);border-style:solid;border-width:0 0 .5px 0;border-radius:0;margin:0;min-height:44px;padding:11px 16px}
+ul.list>li:last-child{border-bottom-width:0}
+ul.list>li.tk{box-shadow:inset 4px 0 0 var(--warn)}ul.list>li.tk.lt{box-shadow:inset 4px 0 0 var(--danger)}ul.list>li.tk.done{box-shadow:inset 4px 0 0 var(--line)}
+ul.list>li.ev{box-shadow:inset 4px 0 0 var(--primary)}
+.card ul.list{background:none;border:0;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;border-radius:0}
+.tl .card{background:var(--card)}
+
+/* cibles tactiles */
+.btn{border-radius:12px;background:var(--glass);border-color:var(--glass-line);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+.btn.p{background:var(--primary);border-color:var(--primary)}
+.btn.wa{background:#25d366;border-color:#25d366}
+.btn.wide{display:flex;justify-content:center;width:100%;margin-top:18px}
+@media (pointer:coarse){.btn{min-height:44px}.btn.s{min-height:36px}input,select{min-height:44px}}
+.check,.tcheck{position:relative}
+.check::after,.tcheck::after{content:"";position:absolute;inset:-12px}
+.chip{background:var(--glass);border-color:var(--glass-line);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+.chip.on{background:var(--primary)}
+
+/* sélecteurs segmentés iOS */
+.seg{background:var(--fill);border:0;border-radius:10px;padding:2px;gap:2px}
+.seg button{background:transparent;border-radius:8px;color:var(--text)}
+.seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.ctabs{display:inline-flex;background:var(--fill);padding:2px;border-radius:10px;gap:2px;max-width:100%;overflow-x:auto}
+.ctabs button{border:0;border-radius:8px;background:transparent;color:var(--text);padding:8px 14px;white-space:nowrap}
+.ctabs button.on{background:var(--card);color:var(--text);font-weight:600;border:0;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+
+/* calendrier */
+.cal-top{background:color-mix(in srgb,var(--card) 80%,transparent);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+
+/* feuilles qui montent du bas */
+dialog{background:var(--card);color:var(--text);border:0;border-radius:var(--rg);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+dialog[open]{animation:pop .25s cubic-bezier(.32,.72,0,1)}
+dialog::backdrop{background:rgba(0,0,0,.4);animation:fade .35s}
+dialog form{padding:0}
+.grab{display:none;width:38px;height:5px;border-radius:3px;background:var(--sep);margin:8px auto 0}
+.sh{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:10px 12px;border-bottom:.5px solid var(--sep);position:sticky;top:0;background:var(--card);z-index:1}
+.sh h3{margin:0;font-size:17px;font-weight:700;text-align:center}
+.lnk{border:0;background:none;color:var(--primary);font:inherit;font-size:17px;padding:10px 8px;min-height:44px;cursor:pointer}
+.lnk.b{font-weight:700;justify-self:end}.lnk:first-child{justify-self:start}
+.sb{padding:4px 16px 20px;overflow:auto}
+@media (max-width:700px){
+  dialog:not(.asheet){margin:auto 0 0;width:100%;max-width:none;max-height:92vh;border-radius:20px 20px 0 0;padding-bottom:env(safe-area-inset-bottom);animation:sheet .35s cubic-bezier(.32,.72,0,1)}
+  .grab{display:block}
+}
+/* menu d'action iOS */
+dialog.asheet{background:transparent;box-shadow:none;margin:auto auto 0;width:min(420px,100%);padding:8px 8px calc(8px + env(safe-area-inset-bottom));animation:sheet .35s cubic-bezier(.32,.72,0,1)}
+.ag{background:var(--card);border-radius:14px;overflow:hidden;margin-top:8px;text-align:center}
+.ag p{margin:0;padding:14px 16px;font-size:13px;color:var(--muted);border-bottom:.5px solid var(--sep)}
+.ag button{display:block;width:100%;border:0;background:none;color:var(--primary);font:inherit;font-size:19px;min-height:56px;cursor:pointer}
+.ag button.red{color:var(--danger)}
+
+/* mouvement */
+main.enter{animation:rise .3s ease}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}}
+@keyframes fade{from{opacity:0}}
+@keyframes sheet{from{transform:translateY(100%)}}
+@keyframes pop{from{opacity:0;transform:scale(.97)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+/* barre d'onglets : pilule flottante en verre (téléphone) */
+@media (max-width:899px){
+  .tabs{left:50%;right:auto;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom));width:min(440px,calc(100% - 24px));
+    border:1px solid var(--glass-line);border-radius:999px;background:var(--glass);box-shadow:var(--glass-shadow);
+    -webkit-backdrop-filter:blur(26px) saturate(180%);backdrop-filter:blur(26px) saturate(180%);padding:5px;gap:2px}
+  .tabs a{flex:1;height:48px;border-radius:999px;justify-content:center;padding:0;color:var(--muted)}
+  .tabs a span{display:none}
+  .tabs a svg{width:25px;height:25px}
+  .tabs a.on{color:var(--primary);background:color-mix(in srgb,var(--primary) 16%,transparent)}
+  .fab{bottom:calc(86px + env(safe-area-inset-bottom))}
+  body{padding-bottom:calc(92px + env(safe-area-inset-bottom))}
+}
+@media (min-width:900px){
+  .top{max-width:1180px;padding:28px 24px 4px}
+  .tabs a svg{width:20px;height:20px;flex:none}
+  .tabs a span{display:inline}
+}
