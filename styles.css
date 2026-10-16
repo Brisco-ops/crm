@@ -325,3 +325,33 @@ body{font-size:16px;font-weight:400;letter-spacing:0}
 }
 
 .av.sq{border-radius:10px}.av.s.sq{border-radius:8px}
+
+/* ===== Espacements resserrés ===== */
+@media (min-width:900px){
+  /* barre latérale */
+  .tabs{gap:0;padding:8px}
+  .tabs .brand{padding:2px 2px 6px}
+  .tabs a{height:28px}
+  /* contenu */
+  main{padding:12px 20px 20px}
+  .top{padding:16px 20px 0}
+  h2{margin:14px 0 6px}
+  h2.dayh{margin:14px 0 6px}
+  .card{padding:10px 12px;margin-bottom:8px}
+  .record{gap:12px}
+  .stats,.stats.slim{gap:8px;margin-bottom:8px}
+  .cal-bar{margin-bottom:8px}
+  .qa{margin-top:10px}
+  hr{margin:10px 0}
+  .prop{margin:7px 0}
+  ul.list>li{padding:8px 14px;min-height:38px}
+  .tbl td{padding:8px 12px}
+  .tbl th{padding:8px 12px}
+  .chips{padding:6px 0}
+  .tl .item{margin-bottom:8px}
+  .empty{padding:18px 10px}
+}
+@media (max-width:899px){
+  h2{margin:16px 0 6px}
+  .card{margin-bottom:8px}
+}
